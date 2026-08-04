@@ -65,7 +65,7 @@ final class AppLock {
                     onUnlocked.run();
                 }
                 @Override public void onAuthenticationError(int errorCode, CharSequence errString) {
-                    if (errorCode != BiometricPrompt.BIOMETRIC_ERROR_NEGATIVE_BUTTON && !activity.isFinishing()) {
+                    if (errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON && !activity.isFinishing()) {
                         showPin(activity, db, onUnlocked);
                     }
                 }
