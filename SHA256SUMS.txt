@@ -1,0 +1,41 @@
+bd276f5a80fa1e35baee6e6cef003c654b5b7991ff47e87b023a86eb4d9f41ba  ./.github/workflows/build-apk.yml
+9d0c62b809cf774b889dd315c3197a82950013bf105360f012746240149e4f89  ./.gitignore
+515a7f9c0de9e28358e3bd24cd4b745b4cb46b1fe91c0172785c118efde685cb  ./IMPORT-TEMPLATE.csv
+82219e05b654873ed1ed3e4fdded177c115ab5362f8841b652f2a0ec4d7f7b29  ./README.md
+0479314a5cdaafa86b406011e7802673792d0ebb12950e467ff72795a010f87a  ./VALIDATION.md
+94de2a40c7aea6a90f8e1cdbc71799bd6c462b971eb71813fad3c6b03d8b0696  ./app/build.gradle
+f75b04455b758b3b3a90fed280d25d599c4ae1abf891b88f50b71f6700d69f9d  ./app/proguard-rules.pro
+7ab73df7d22c6617bf257582efb021f6d4f90087e06916469746595e038d37f5  ./app/src/main/AndroidManifest.xml
+f7ff0c0370aba41977defc2b37bc1d101cd7c103da1359572f0794620c82a981  ./app/src/main/assets/web/app.js
+8fa7f4dc3ed8847c04a4e5469d7a146d12e5f2e6a95c825bebee8493033ecdfc  ./app/src/main/assets/web/icons/icon-192.png
+8f2500c93119a698d23be1ad904a6c341bedff962c1790c780c3e158d5b478da  ./app/src/main/assets/web/icons/icon-512.png
+fc6d5e95f90634e4b3045355c68a9b7bc5259491623fdde861a013bd3b68fd43  ./app/src/main/assets/web/index.html
+dfc753949d33287b2b9083fe93281b0da2135317f7baedc6a386c17683dac956  ./app/src/main/assets/web/manifest.webmanifest
+7d415e306fab8dca6707b19bd1688956a08b31f3339490d65a01f5860d6ed6a3  ./app/src/main/assets/web/seed-data.js
+4183e4fa2371bb6e2e76483ae593422199dfcbded28dfd0ad4933b483adeed35  ./app/src/main/assets/web/seed/GUJ_SALES.xls
+315b9272b8e0288005de38b2f602d861b03c6680157f143b13045c9370be895f  ./app/src/main/assets/web/seed/Kunjan compilation july26.xlsx
+465f72bdd9388f48d6e11903307feed6ebb0c76e9c5b11723ca500adedcb58e5  ./app/src/main/assets/web/seed/Lost Prescrber rapid action & Follow up.xlsx
+4d96b761ef8da3af1b84b89e3c75cc10da3d21d581ef1662a3d26b8a8e3a86d0  ./app/src/main/assets/web/seed/MY Z & NICU Covering July.26.xlsx
+e87030508d62185f2a592043c3f6c4f4d7c3783b42a4d975681bbed5b7c6f5b5  ./app/src/main/assets/web/styles.css
+bdafe1cb70177ca29ea484f61111738ec5ca56fb43af8c7b20a71f11f7309a33  ./app/src/main/java/com/mrfieldbook/app/MainActivity.java
+87c2f10631b80568763971e0186f1176ec44a4575261f76c6e0f521bc16d005c  ./app/src/main/java/com/mrfieldbook/app/SpreadsheetParser.java
+a3a302d09a009023c087ee51928ee0c7a7b9c2165fa0ead394c10da80df46ec4  ./app/src/main/res/mipmap-hdpi/ic_launcher.png
+f5060d1e7eda8ac5f9e8b313ed6c268278b51b6c69414f755bebdec9d46c5fec  ./app/src/main/res/mipmap-hdpi/ic_launcher_round.png
+4dfc5864749237cc83269c00f601b2abc1880eb2073bd4ce5eca1262635f6579  ./app/src/main/res/mipmap-mdpi/ic_launcher.png
+25a3b4b968533bf5fa6da5ddffec00a37e92238adc14b7b0acec5cab752e3043  ./app/src/main/res/mipmap-mdpi/ic_launcher_round.png
+17d9de402fa3c7d1e9270496e89ed5556cbb3ab5587422a7fb5db15db081801c  ./app/src/main/res/mipmap-xhdpi/ic_launcher.png
+bfd07857b3fad634cb716bb6d44164b67faa95434a1d11957d56dbb5de7ff5dc  ./app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
+45b88b783346e465379c4abfa1fdd3839be0ee14f04595b3dfaeb8a49a15857b  ./app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+2c19f0b927228b42ef4968203d21aadd7615fd03f9242bc70ad8fa6e06eacd9f  ./app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
+e4979c76f5d232648efc8affa013e7038a9689f63e7ea538efa541165e86ddef  ./app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+46ff03a2a73448039048d1b63b91926ca2d72c4b2f9091c6e37c55f53d206f9b  ./app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+56cadbdf93ddb4a47683cd5531a9ffd6668e3045312123961405d94ae1bc3651  ./app/src/main/res/values/colors.xml
+44cfc84da12420c7bbbaa5d99976339cb3454fc79ee387e52403648f515e6d91  ./app/src/main/res/values/strings.xml
+12c8f34b4d32cb0569608e115982d229227153e3c272a62c6e819e9052c21b6b  ./app/src/main/res/values/styles.xml
+8ecf4ea064988ef8747f9de3b06cd5dbb735b79c99afff6b30f5e9859bc71021  ./app/src/main/res/xml/backup_rules.xml
+6844d442e0ae87ec0b784c8afe5598878784c4fa41aced1e9389a9b3bfb25666  ./build.gradle
+cc38bc495ca4e4d7fa2fe7c9c1112f36af7a63fbf4fc3e7a088e215942403385  ./gradle.properties
+cdab1ffb439219b1db125e3c99a86cf2424f8762b9b3faa404ed061e3635ecde  ./gradle/wrapper/gradle-wrapper.properties
+72e11f6ad73e98cf915b8f2e402b3311e291038cf5d698e06954f9c5e89e9cd4  ./gradlew
+3a12f918fcd6134faff3f6397777bef3d6dd8de3afcd60781f7b9f7492bdff2a  ./gradlew.bat
+14ee53184a8707f0c287b02e51e413c96767ae1fd4900254f6fce99820ac4e01  ./settings.gradle

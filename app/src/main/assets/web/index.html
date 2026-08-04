@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a6c62" />
+  <meta name="description" content="Offline MR doctor–hospital–chemist meeting logging with GPS, prescription feedback, follow-up and Excel import." />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="stylesheet" href="styles.css" />
+  <title>MR Daily Auto</title>
+</head>
+<body>
+  <div id="lockScreen" class="lock-screen hidden" aria-hidden="true">
+    <div class="lock-card">
+      <div class="brand-mark large">MR</div>
+      <h1>MR Daily Auto</h1>
+      <p>Enter your local app PIN</p>
+      <input id="unlockPin" class="pin-input" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="••••" />
+      <button id="unlockBtn" class="btn primary full">Unlock</button>
+      <p id="unlockError" class="error-text"></p>
+    </div>
+  </div>
+
+  <div id="app" class="app-shell">
+    <header class="topbar">
+      <button class="brand-wrap plain-button" data-nav="dashboard" aria-label="Home">
+        <div class="brand-mark">MR</div>
+        <div><strong>Daily Auto</strong><small id="profileLine">Rajkot • Olakiya Vishal</small></div>
+      </button>
+      <div class="top-actions">
+        <button id="quickSearchBtn" class="icon-btn" aria-label="Search">⌕</button>
+        <button id="quickLogBtn" class="icon-btn accent" aria-label="Log call">＋</button>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <section class="page active" data-page="dashboard">
+        <div class="hero-card">
+          <div>
+            <span class="eyebrow" id="todayLabel">TODAY</span>
+            <h1 id="greeting">Field report ready</h1>
+            <p id="routeLabel">Search doctor or hospital, confirm GPS, then save.</p>
+          </div>
+          <button class="hero-add" data-action="quick-log" aria-label="Log activity">＋</button>
+        </div>
+
+        <div class="report-card">
+          <div class="section-head compact-head">
+            <div><h2>Daily report</h2><p id="reportPeriod">Today / August cumulative</p></div>
+            <span class="live-pill">AUTO</span>
+          </div>
+          <div id="reportKpis" class="report-kpis"></div>
+          <div class="report-actions">
+            <button id="copyReportBtn" class="btn secondary">Copy</button>
+            <button id="shareReportBtn" class="btn primary">Share / WhatsApp</button>
+          </div>
+        </div>
+
+        <div class="stats-grid">
+          <button class="stat-card" data-nav="doctors"><span class="stat-icon">⚕</span><strong id="doctorCount">0</strong><small>Doctors</small></button>
+          <button class="stat-card" data-nav="chemists"><span class="stat-icon">✚</span><strong id="chemistCount">0</strong><small>Chemists</small></button>
+          <button class="stat-card" data-nav="visits"><span class="stat-icon">✓</span><strong id="todayVisitCount">0</strong><small>Meetings today</small></button>
+          <button class="stat-card warning" data-filter-followups="due"><span class="stat-icon">◷</span><strong id="dueCount">0</strong><small>Due follow-ups</small></button>
+        </div>
+
+        <div class="section-head"><div><h2>Today’s calls</h2><p>Recent doctor–chemist meetings with GPS</p></div><button class="text-btn" data-nav="visits">View all</button></div>
+        <div id="todayActivityList" class="stack-list"></div>
+
+        <div class="section-head"><div><h2>Follow-ups</h2><p>Commitments requiring action</p></div></div>
+        <div id="nextActionsList" class="stack-list"></div>
+      </section>
+
+      <section class="page" data-page="doctors">
+        <div class="page-title-row"><div><h1>Doctors</h1><p id="doctorSubtitle">0 records</p></div><button class="fab-inline" data-action="add-doctor">＋ Add</button></div>
+        <div class="search-row"><label class="search-box"><span>⌕</span><input id="doctorSearch" type="search" placeholder="Doctor, hospital, chemist, address, area…" /></label><button id="doctorFilterBtn" class="filter-btn">Filter</button></div>
+        <div id="doctorChips" class="chip-row"></div>
+        <div id="doctorList" class="card-list"></div>
+      </section>
+
+      <section class="page" data-page="chemists">
+        <div class="page-title-row"><div><h1>Chemists</h1><p id="chemistSubtitle">0 records</p></div><button class="fab-inline" data-action="add-chemist">＋ Add</button></div>
+        <div class="search-row"><label class="search-box"><span>⌕</span><input id="chemistSearch" type="search" placeholder="Chemist name, address or area…" /></label><button id="stockFilterBtn" class="filter-btn">Stock</button></div>
+        <div id="chemistChips" class="chip-row"></div>
+        <div id="chemistList" class="card-list"></div>
+      </section>
+
+      <section class="page" data-page="visits">
+        <div class="page-title-row"><div><h1>Activity</h1><p id="visitSubtitle">Doctor–chemist meetings, feedback and locations</p></div><button class="fab-inline" data-action="quick-log">＋ Meeting</button></div>
+        <div class="segmented" id="visitSegments"><button class="active" data-visit-filter="all">All</button><button data-visit-filter="doctor">Doctors</button><button data-visit-filter="chemist">Chemists</button><button data-visit-filter="due">Due</button></div>
+        <div id="visitList" class="timeline-list"></div>
+      </section>
+
+      <section class="page" data-page="tools">
+        <div class="page-title-row"><div><h1>Tools & Profile</h1><p>Import new lists, backup and report settings</p></div></div>
+
+        <div class="settings-card import-card">
+          <div class="settings-icon">XL</div>
+          <div class="settings-copy"><h3>Import new doctor / chemist data</h3><p>Import new doctor and chemist lists anytime. Existing links, GPS and meeting history stay safe.</p></div>
+          <label class="btn primary compact file-btn">Choose files<input id="importFile" type="file" accept=".xlsx,.xls,.csv,.json" multiple /></label>
+        </div>
+        <button id="loadBundledBtn" class="btn secondary full">Load the supplied Excel files</button>
+        <div id="importStatus" class="notice hidden"></div>
+        <div id="importHistory" class="import-history"></div>
+
+        <div class="settings-card-grid">
+          <button class="settings-card action-card" id="exportJsonBtn"><span>⇩</span><div><h3>Full backup</h3><p>Doctors, chemists, GPS, meetings and settings</p></div></button>
+          <button class="settings-card action-card" id="exportCsvBtn"><span>▦</span><div><h3>Export CSV</h3><p>Doctor, chemist and linked master</p></div></button>
+          <button class="settings-card action-card" id="restoreBtn"><span>⇧</span><div><h3>Restore backup</h3><p>Import MR Daily Auto JSON</p></div></button>
+          <input id="restoreInput" type="file" accept=".json" hidden />
+          <button class="settings-card action-card" id="installBtn"><span>⬇</span><div><h3>Install app</h3><p>Add to phone home screen</p></div></button>
+        </div>
+
+        <form id="profileForm" class="form-card">
+          <div class="form-title"><h2>Daily report profile</h2><p>These values appear automatically in every report.</p></div>
+          <div class="field-grid two">
+            <label><span>Name of TM</span><input name="tmName" required /></label>
+            <label><span>HQ</span><input name="hq" required /></label>
+            <label><span>Join work with</span><input name="joinWorkWith" placeholder="IND" /></label>
+            <label><span>Company / Division</span><input name="companyDivision" placeholder="FDC Nutrica" /></label>
+          </div>
+          <label><span>Products</span><textarea name="products" rows="3" placeholder="MumMum 1, MumMum 2, Simyl MCT…"></textarea></label>
+          <button class="btn primary" type="submit">Save profile</button>
+        </form>
+
+        <form id="openingForm" class="form-card">
+          <div class="form-title"><h2>Month opening balances</h2><p>Use this when starting the app mid-month. Cumulative = opening + all app logs in this month.</p></div>
+          <div class="field-grid two" id="openingFields"></div>
+          <button class="btn primary" type="submit">Save opening balances</button>
+        </form>
+
+        <form id="pinForm" class="form-card">
+          <div class="form-title"><h2>Privacy lock</h2><p>Optional 4–6 digit local PIN.</p></div>
+          <div class="field-grid two"><label><span>New PIN</span><input name="pin" type="password" inputmode="numeric" minlength="4" maxlength="6" /></label><label><span>Confirm PIN</span><input name="confirmPin" type="password" inputmode="numeric" minlength="4" maxlength="6" /></label></div>
+          <div class="button-row"><button class="btn secondary" type="button" id="removePinBtn">Remove PIN</button><button class="btn primary" type="submit">Set PIN</button></div>
+        </form>
+
+        <div class="danger-card"><div><h3>Reset app data</h3><p>Deletes local doctors, chemists, calls and settings on this device.</p></div><button id="resetBtn" class="btn danger compact">Reset</button></div>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Primary">
+      <button class="active" data-nav="dashboard"><span>⌂</span><small>Home</small></button>
+      <button data-nav="doctors"><span>⚕</span><small>Doctors</small></button>
+      <button data-nav="chemists"><span>✚</span><small>Chemists</small></button>
+      <button data-nav="visits"><span>✓</span><small>Activity</small></button>
+      <button data-nav="tools"><span>⚙</span><small>Tools</small></button>
+    </nav>
+  </div>
+
+  <div id="sheetBackdrop" class="sheet-backdrop hidden"></div>
+  <aside id="editorSheet" class="bottom-sheet hidden" aria-modal="true" role="dialog">
+    <div class="sheet-handle"></div>
+    <div class="sheet-head"><div><h2 id="sheetTitle">Add</h2><p id="sheetSubtitle"></p></div><button class="icon-btn" data-close-sheet>×</button></div>
+    <div id="sheetBody" class="sheet-body"></div>
+  </aside>
+  <div id="toast" class="toast hidden" role="status"></div>
+
+  <script src="seed-data.js" defer></script>
+  <script src="app.js" defer></script>
+</body>
+</html>

@@ -1,18 +1,10 @@
-# Validation record
+# Validation
 
-Validated in the generation environment:
-
-- Java source parsing completed with no syntax errors.
-- Android manifest and resource XML files parse as valid XML.
-- Starter JSON parses successfully: 39 doctors, 106 chemists/stockists, 17 products.
-- SQLite schema and doctor search, due-follow-up and route queries were executed against an in-memory SQLite database.
-- Manifest class references exist.
-- Duplicate import path preserves existing address, chemist, timings, GPS and notes when incoming cells are blank.
-- ZIP archive integrity checked after packaging.
-
-Not executed in the generation environment:
-
-- Android Gradle compilation, APK signing and installation, because the active runtime does not contain the Android SDK/build tools.
-- Physical-device GPS, biometric prompt, reminder notification and Drive-provider tests.
-
-Run the included GitHub Actions workflow or Android Studio build before installation.
+- Exact v7 `styles.css` retained unchanged.
+- Exact v7 page structure retained; only the remote XLSX script and page-version title were changed.
+- v7 JavaScript syntax checked with `node --check` after Android bridge additions.
+- Android source reduced to a WebView host plus offline spreadsheet parser; old different native screens were removed.
+- GPS, file picker, native share, clipboard, save picker and SHA-256 PIN bridge paths are wired.
+- No remote JavaScript is required for normal app startup or `.xlsx`/CSV import.
+- Static Java parse check found no Java syntax errors; Android symbol resolution requires the GitHub Android build.
+- Final APK must still be tested on the target phone for Android location permission, file picker and OEM-specific WebView behavior.
