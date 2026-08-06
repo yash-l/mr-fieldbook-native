@@ -14,10 +14,15 @@ import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.os.Bundle;
+import android.os.Build;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.content.ClipboardManager;
+import android.content.SharedPreferences;
 import android.content.Context;
 import android.webkit.GeolocationPermissions;
 import android.webkit.JavascriptInterface;
@@ -72,6 +77,7 @@ public final class MainActivity extends Activity {
     private PlacesClient placesClient;
     private String placesInitError = "Google Places API key is not configured.";
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private boolean webReady;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -97,6 +103,60 @@ public final class MainActivity extends Activity {
         webView.setWebViewClient(new AppWebViewClient());
         webView.setWebChromeClient(new AppWebChromeClient());
         webView.loadUrl("file:///android_asset/web/index.html");
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        mainHandler.postDelayed(this::deliverPendingSanText, 450L);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        mainHandler.postDelayed(this::deliverPendingSanText, 350L);
+    }
+
+    private void deliverPendingSanText() {
+        if (!webReady || webView == null) return;
+        SharedPreferences prefs = getSharedPreferences(SanOverlayService.PREFS, MODE_PRIVATE);
+        String text = prefs.getString(SanOverlayService.KEY_PENDING_TEXT, "");
+        if (text == null || text.trim().isEmpty()) return;
+        prefs.edit().remove(SanOverlayService.KEY_PENDING_TEXT).apply();
+        String script = "if(window.__mrSanOverlayText){window.__mrSanOverlayText(" + JSONObject.quote(text) + ");}";
+        webView.evaluateJavascript(script, null);
+    }
+
+    private String readClipboardText() {
+        try {
+            ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            ClipData clip = clipboard == null ? null : clipboard.getPrimaryClip();
+            if (clip == null || clip.getItemCount() == 0) return "";
+            CharSequence text = clip.getItemAt(0).coerceToText(this);
+            return text == null ? "" : text.toString().trim();
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private void hapticFeedback(String kind) {
+        long duration = "strong".equalsIgnoreCase(kind) ? 38L : 18L;
+        try {
+            Vibrator vibrator;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                VibratorManager manager = (VibratorManager) getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                vibrator = manager == null ? null : manager.getDefaultVibrator();
+            } else {
+                vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+            }
+            if (vibrator == null || !vibrator.hasVibrator()) return;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE));
+            } else {
+                vibrator.vibrate(duration);
+            }
+        } catch (Exception ignored) {}
     }
 
     @Override
@@ -480,6 +540,13 @@ public final class MainActivity extends Activity {
 
     private final class AppWebViewClient extends WebViewClient {
         @Override
+        public void onPageFinished(WebView view, String url) {
+            super.onPageFinished(view, url);
+            webReady = true;
+            mainHandler.postDelayed(MainActivity.this::deliverPendingSanText, 250L);
+        }
+
+        @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
             Uri uri = request.getUrl();
             String scheme = uri.getScheme();
@@ -533,6 +600,70 @@ public final class MainActivity extends Activity {
         @JavascriptInterface
         public boolean isNativeApp() {
             return true;
+        }
+
+        @JavascriptInterface
+        public boolean canDrawOverlays() {
+            return Settings.canDrawOverlays(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public boolean isSanOverlayRunning() {
+            return getSharedPreferences(SanOverlayService.PREFS, MODE_PRIVATE)
+                    .getBoolean(SanOverlayService.KEY_RUNNING, false);
+        }
+
+        @JavascriptInterface
+        public void requestSanOverlayPermission() {
+            runOnUiThread(() -> {
+                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + getPackageName()));
+                startActivity(intent);
+            });
+        }
+
+        @JavascriptInterface
+        public void startSanOverlay() {
+            runOnUiThread(() -> {
+                if (!Settings.canDrawOverlays(MainActivity.this)) {
+                    Toast.makeText(MainActivity.this, "Allow Display over other apps, then tap Start overlay again.", Toast.LENGTH_LONG).show();
+                    Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:" + getPackageName()));
+                    startActivity(intent);
+                    return;
+                }
+                Intent serviceIntent = new Intent(MainActivity.this, SanOverlayService.class);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(serviceIntent);
+                else startService(serviceIntent);
+                hapticFeedback("strong");
+                Toast.makeText(MainActivity.this, "SAN copy overlay started", Toast.LENGTH_SHORT).show();
+            });
+        }
+
+        @JavascriptInterface
+        public void stopSanOverlay() {
+            runOnUiThread(() -> {
+                stopService(new Intent(MainActivity.this, SanOverlayService.class));
+                Toast.makeText(MainActivity.this, "SAN copy overlay stopped", Toast.LENGTH_SHORT).show();
+            });
+        }
+
+        @JavascriptInterface
+        public String readClipboardText() {
+            return MainActivity.this.readClipboardText();
+        }
+
+        @JavascriptInterface
+        public String consumeSanOverlayText() {
+            SharedPreferences prefs = getSharedPreferences(SanOverlayService.PREFS, MODE_PRIVATE);
+            String text = prefs.getString(SanOverlayService.KEY_PENDING_TEXT, "");
+            prefs.edit().remove(SanOverlayService.KEY_PENDING_TEXT).apply();
+            return text == null ? "" : text;
+        }
+
+        @JavascriptInterface
+        public void haptic(String kind) {
+            runOnUiThread(() -> hapticFeedback(kind));
         }
 
         @JavascriptInterface

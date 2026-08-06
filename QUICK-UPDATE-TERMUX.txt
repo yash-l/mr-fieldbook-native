@@ -1,26 +1,11 @@
-# Download MR-Machine-Intelligence-v14-Source.zip into /sdcard/Download
-
 cd /sdcard/Download
-ZIP="$(find . -maxdepth 1 -type f -iname 'MR-Machine-Intelligence-v14-Source*.zip' | head -n 1)"
-[ -n "$ZIP" ] || { echo "ZIP not found"; exit 1; }
-
-rm -rf ~/MR-Machine-Intelligence-v14
-unzip -o "$ZIP" -d ~
+rm -rf ~/MR-Machine-Intelligence-v14.4
+unzip -o MR-Machine-Intelligence-v14.4-SAN-Overlay-Source.zip -d ~
 
 cd ~/MR-FieldBook-Native
 find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
-cp -a ~/MR-Machine-Intelligence-v14/. .
+cp -a ~/MR-Machine-Intelligence-v14.4/. .
 
 git add -A
-git commit -m "Add MR Machine intelligence smart patch and reports v14"
+git commit -m "Add SAN copy overlay searchable chemist and nearest-chain route v14.4"
 git push
-
-sleep 8
-RUN_ID="$(gh run list --workflow 'Build Android APK' --limit 1 --json databaseId --jq '.[0].databaseId')"
-echo "Run ID: $RUN_ID"
-gh run watch "$RUN_ID" --exit-status
-
-rm -rf /sdcard/Download/MR-Machine-v14-APK
-mkdir -p /sdcard/Download/MR-Machine-v14-APK
-gh run download "$RUN_ID" -n MR-Machine-Intelligence-v14-APK -D /sdcard/Download/MR-Machine-v14-APK
-find /sdcard/Download/MR-Machine-v14-APK -type f

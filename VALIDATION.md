@@ -1,28 +1,31 @@
-# Validation — MR Machine Intelligence v14
+# Validation — MR Machine Intelligence v14.4
 
 ## Passed in this delivery
 
 - `app.js` passes `node --check`.
-- Browser runtime smoke test loaded the embedded 39-doctor seed and rendered the intelligence dashboard without JavaScript exceptions.
-- MR Machine sheet rendered 12 ranked doctor suggestions and the data-quality dashboard.
-- Quick meeting screen rendered six meeting outcomes, timing presets and manual-only hospital GPS verification.
-- A simulated **Doctor on leave** save created one call, one pending reschedule and a replacement-doctor suggestion without requesting GPS.
-- Existing v13 doctor, chemist, visit, nearby hospital, order, backup and XLSX data structures are migrated to v14.
-- Not-met records store outcome, reason, suggested date/time, replacement doctor and machine action.
-- Smart Patch, Reschedules and Data Quality sheets are added to the full XLSX.
-- Four company reports are generated as separate XLSX files inside one ZIP using the native Android bridge.
-- App version is 14.0.0 / versionCode 14.
-- Android manifest, resource XML and web manifest parse successfully.
+- Android manifest and web manifest parse as XML/JSON.
+- `android.useAndroidX=true` remains enabled.
+- Gradle `plugins {}` block remains first in `app/build.gradle`.
+- App version is `14.4.0` / versionCode `144`.
+- Android manifest declares the visible overlay permission and Android 14 special-use foreground-service type.
+- SAN overlay service includes a draggable MR bubble, editable paste box, clipboard-on-tap action, send-to-app action and stop action.
+- SAN copied text is reviewed and parsed before it can pre-fill Log Meeting.
+- Meeting chemist selection is searchable by name, area and address.
+- Doctor route ordering is strict nearest-chain from each previous stop; timing conflict is a warning only.
+- Premium transitions and native haptic bridge are included.
+- Accepted/placed orders with pending fulfilment remain included in distributor planning.
+- Doctors sharing the same hospital/place/map coordinate remain grouped into one route stop.
 
-## Still requires phone/GitHub verification
+## Still requires GitHub/phone verification
 
-- GitHub Actions Android compilation and dependency resolution.
-- APK installation on the user's phone.
-- Real microphone and hospital GPS verification.
+- Android APK compilation and dependency resolution on GitHub Actions.
+- First-time “Display over other apps” permission flow on the user’s phone.
+- Overlay behavior over the installed SAN app; protected screens may block overlays.
+- Clipboard paste behavior on the user’s Android/OxygenOS build.
+- Haptic strength and premium transition feel on the user’s phone.
+- Google Maps route opening with real verified coordinates.
 - Live Google Places results when `PLACES_API_KEY` is configured.
-- Saving and opening the four-workbook ZIP on Android.
-- Final column mapping against the company's latest official report templates and official sales source.
 
-## Accuracy limitation
+## Routing rule
 
-The generated company files use corresponding report names and mapped business fields, but do not preserve every style, merged cell or formula from the supplied original templates. Official sales values remain blank until imported.
+The selected start doctor/hospital is the origin. The next stop is the geographically nearest remaining verified hospital. After reaching that stop, the next selection is recalculated from that stop, continuing until all eligible stops are ordered. Timing conflicts are displayed but do not cause the route to jump over a nearer location. Google Maps calculates the final road route; in-app distance remains an approximate straight-line estimate.

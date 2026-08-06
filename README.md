@@ -1,4 +1,4 @@
-# MR Machine Intelligence v14
+# MR Machine Intelligence v14.4
 
 Android MR field app using the existing mobile UI, with a local intelligence layer for daily patch preparation, doctor follow-up, not-met rescheduling, hospital verification, POB and company reports.
 
@@ -70,6 +70,7 @@ The reports use actual app data. Official target, primary, secondary and closing
 - Smart Patch
 - Reschedules
 - Data Quality
+- Distributor Planning
 - Products
 - Voice Captures
 
@@ -79,4 +80,26 @@ The APK builds on GitHub Actions. Optional live Google nearby-hospital results r
 
 Build artifact:
 
-`MR-Machine-Intelligence-v14-APK`
+`MR-Machine-Intelligence-v14.4-APK`
+
+
+## v14.3 Planning correction
+- Accepted POB orders automatically create a pending distributor stop.
+- Distributor stop remains visible until the order is marked fulfilled.
+- Doctors sharing the same hospital/map pin are grouped into one location stop.
+- Distributor location uses a manually verified Maps pin; device GPS remains doctor/hospital-only.
+- Google Maps calculates the actual road route; in-app kilometre values are approximate straight-line estimates.
+
+
+## v14.4 SAN copy overlay + premium field flow
+
+- Tools → **SAN copy overlay** requests the Android “Display over other apps” permission once.
+- A draggable **MR** bubble stays visible over SAN while the user chooses what to copy.
+- The bubble expands into a paste/review box. It reads the clipboard only after the user taps **Paste clipboard**.
+- **Send to MR** opens a review screen where doctor, hospital, chemist, distributor, timings, products and POB are detected before anything is saved.
+- **Use these details in Log Meeting** pre-fills the normal meeting screen; final save remains user-confirmed.
+- The meeting chemist field is now searchable by chemist name, area and address instead of a long dropdown.
+- Route ordering uses strict nearest-chain logic: selected start → nearest stop → nearest from that stop. Timing conflicts are warnings and no longer reorder a nearer stop.
+- Premium sheet/page transitions and native haptic feedback are included.
+
+Protected apps may choose to block overlays. In that case, copy in SAN, return to MR, and use **Paste current clipboard directly in app**.

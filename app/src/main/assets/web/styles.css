@@ -92,3 +92,27 @@
 .outcome-selector{display:grid;grid-template-columns:repeat(2,1fr);gap:7px;margin-bottom:10px}.outcome-selector button{border:1px solid #d8e1e8;background:#fff;border-radius:11px;padding:10px 7px;font-size:11px;font-weight:800;color:#34495e}.outcome-selector button.selected{background:#0a6c62;color:#fff;border-color:#0a6c62}.intelligence-preview{background:#edf8f5;border:1px solid #bfe6dc;border-radius:13px;padding:11px;margin:8px 0 12px}.intelligence-preview strong{font-size:12px;color:#075f56}.intelligence-preview p{margin:4px 0 0;font-size:11px;line-height:1.45;color:#345d58}
 .schedule-quick{display:flex!important;flex-wrap:wrap;gap:7px}.featured-report{border-color:#9bd9cf!important;background:#eefaf7!important}.featured-report>span{background:#0a6c62!important;color:#fff!important}
 @media(max-width:370px){.machine-head{display:block}.machine-head button{margin-top:10px}.outcome-selector{grid-template-columns:1fr}.machine-summary-grid{grid-template-columns:1fr 1fr}}
+
+/* v14.4 premium interaction, searchable chemist and SAN copy overlay */
+:root{--premium-glow:0 14px 34px rgba(15,118,110,.16)}
+button,.btn,.settings-card,.mini-card,.route-stop,.search-result{transition:transform .16s ease,box-shadow .18s ease,border-color .18s ease,background-color .18s ease}
+button:active,.btn:active,.settings-card:active,.mini-card:active,.route-stop:active{transform:scale(.985)}
+.action-card:hover,.mini-card:hover,.search-result:hover{border-color:#b7d9d4;box-shadow:var(--premium-glow)}
+.bottom-sheet{animation:premiumSheetUp .34s cubic-bezier(.2,.9,.2,1)}
+.sheet-backdrop{animation:premiumFade .22s ease}
+@keyframes premiumSheetUp{from{opacity:.55;transform:translate(-50%,105%) scale(.985)}to{opacity:1;transform:translate(-50%,0) scale(1)}}
+@keyframes premiumFade{from{opacity:0}to{opacity:1}}
+.page.active{animation:premiumPageIn .28s cubic-bezier(.2,.8,.2,1)}
+@keyframes premiumPageIn{from{opacity:0;transform:translateY(9px) scale(.995)}to{opacity:1;transform:none}}
+.chemist-lookup-field{position:relative}
+.chemist-search-result strong{font-size:12px}.chemist-search-result small{line-height:1.45}
+.chemist-lookup-field .lookup-results{max-height:280px;box-shadow:0 18px 38px rgba(15,23,42,.13);border-color:#cbdedb}
+.san-overlay-card{background:linear-gradient(145deg,#0f766e,#12334b)!important;color:#fff;border:0!important;box-shadow:0 16px 34px rgba(15,118,110,.24)}
+.san-overlay-card>span{display:grid;place-items:center;width:44px;height:44px;border-radius:15px;background:rgba(255,255,255,.16);font-size:14px!important;font-weight:900}
+.san-overlay-card h3{color:#fff}.san-overlay-card p{color:#d8f4ee}
+.overlay-status-card{display:flex;align-items:center;gap:12px;padding:14px;border:1px solid var(--line);border-radius:17px;background:#f7f9fc;margin-bottom:12px}
+.overlay-status-card>span{font-size:22px;color:#94a3b8}.overlay-status-card.running>span{color:#0f9f79;text-shadow:0 0 18px rgba(15,159,121,.45)}
+.overlay-status-card strong,.overlay-status-card small{display:block}.overlay-status-card strong{font-size:14px}.overlay-status-card small{font-size:10px;color:var(--muted);margin-top:3px}
+.san-flow{display:grid;gap:8px;margin:10px 0 14px}.san-flow>div{display:grid;grid-template-columns:30px 1fr;gap:9px;align-items:center;padding:10px 11px;border-radius:14px;background:linear-gradient(135deg,#f4fbfa,#f7f9fc);border:1px solid #dceae8}.san-flow b{display:grid;place-items:center;width:27px;height:27px;border-radius:50%;background:var(--brand);color:#fff}.san-flow span{font-size:11px;line-height:1.45;color:#445164}
+.san-detected-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}.san-detected-grid>div{padding:10px;border-radius:13px;background:#f7f9fc;border:1px solid var(--line)}.san-detected-grid small,.san-detected-grid strong{display:block}.san-detected-grid small{font-size:8px;text-transform:uppercase;font-weight:900;color:var(--muted)}.san-detected-grid strong{font-size:11px;margin-top:4px;line-height:1.4;word-break:break-word}.san-product-detection{margin-bottom:12px}
+@media(max-width:430px){.san-detected-grid{grid-template-columns:1fr}.button-row{flex-wrap:wrap}.button-row .btn{flex:1 1 130px}}
