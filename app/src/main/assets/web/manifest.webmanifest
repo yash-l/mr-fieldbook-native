@@ -1,7 +1,7 @@
 {
-  "name": "MR Doctor\u2013Chemist Auto Log",
-  "short_name": "MR Auto Log",
-  "description": "Fast doctor\u2013chemist meeting logging with GPS, prescription feedback and automatic daily reporting.",
+  "name": "MR Machine Intelligence v14",
+  "short_name": "MR Machine",
+  "description": "Intelligent MR field app with smart patch, not-met rescheduling, doctor-hospital verification, POB and company report pack.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

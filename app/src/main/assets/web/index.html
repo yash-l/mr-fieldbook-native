@@ -4,18 +4,18 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0a6c62" />
-  <meta name="description" content="Offline MR doctor–hospital–chemist meeting logging with GPS, prescription feedback, follow-up and Excel import." />
+  <meta name="description" content="Offline intelligent MR field app with smart patch, not-met rescheduling, doctor-hospital verification, product feedback, POB and company reports." />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/icon-192.png" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="stylesheet" href="styles.css" />
-  <title>MR Daily Auto</title>
+  <title>MR Machine Intelligence</title>
 </head>
 <body>
   <div id="lockScreen" class="lock-screen hidden" aria-hidden="true">
     <div class="lock-card">
       <div class="brand-mark large">MR</div>
-      <h1>MR Daily Auto</h1>
+      <h1>MR Machine Intelligence</h1>
       <p>Enter your local app PIN</p>
       <input id="unlockPin" class="pin-input" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="••••" />
       <button id="unlockBtn" class="btn primary full">Unlock</button>
@@ -27,7 +27,7 @@
     <header class="topbar">
       <button class="brand-wrap plain-button" data-nav="dashboard" aria-label="Home">
         <div class="brand-mark">MR</div>
-        <div><strong>Daily Auto</strong><small id="profileLine">Rajkot • Olakiya Vishal</small></div>
+        <div><strong>MR Machine</strong><small id="profileLine">Rajkot • Olakiya Vishal</small></div>
       </button>
       <div class="top-actions">
         <button id="quickSearchBtn" class="icon-btn" aria-label="Search">⌕</button>
@@ -41,9 +41,23 @@
           <div>
             <span class="eyebrow" id="todayLabel">TODAY</span>
             <h1 id="greeting">Field report ready</h1>
-            <p id="routeLabel">Search doctor or hospital, confirm GPS, then save.</p>
+            <p id="routeLabel">Search doctor, confirm hospital, pharmacy, timing and GPS, then save.</p>
           </div>
           <button class="hero-add" data-action="quick-log" aria-label="Log activity">＋</button>
+        </div>
+
+        <div class="collection-mode-card">
+          <div class="collection-head"><div><span class="eyebrow">WORKFLOW</span><h2 id="collectionModeTitle">Data gathering mode</h2></div><button id="workflowModeBtn" class="btn secondary compact">Switch to field work</button></div>
+          <p id="collectionModeText">Select the accurate doctor, then confirm hospital, pharmacy, meeting timing and GPS once.</p>
+          <div class="progress-track"><span id="collectionProgressBar"></span></div>
+          <small id="collectionProgressText">0% ready</small>
+          <div class="collection-actions"><button data-action="voice-capture">🎙 Voice capture</button><button data-action="add-doctor">+ Doctor</button><button data-action="add-chemist">+ Chemist</button><button data-action="add-distributor">+ Distributor</button></div>
+        </div>
+
+        <div class="machine-card">
+          <div class="machine-head"><div><span class="eyebrow">INTELLIGENCE</span><h2>MR Machine</h2><p id="machineQualityText">Reading doctor data…</p></div><button id="machineOpenBtn" class="btn primary compact">Open Machine</button></div>
+          <div id="machineTopList" class="machine-top-list"></div>
+          <small class="machine-footnote">Patch score uses doctor timing, follow-up, not-met history, product feedback and data quality. GPS is not used for attendance or background tracking.</small>
         </div>
 
         <div class="report-card">
@@ -65,8 +79,17 @@
           <button class="stat-card warning" data-filter-followups="due"><span class="stat-icon">◷</span><strong id="dueCount">0</strong><small>Due follow-ups</small></button>
         </div>
 
+        <div class="field-tools-grid">
+          <div class="field-tool-card nearby-tool"><div><small>NEARBY HOSPITALS</small><strong id="nearbyReadyCount">GPS</strong><p>Find saved and live hospitals around you</p></div><button id="nearbyHospitalBtn" class="btn primary compact">Find nearby</button></div>
+          <div class="field-tool-card route-tool"><div><small>SAVED LOCATION ROUTE</small><strong id="routeReadyCount">0</strong><p id="routeReadyText">Verify hospital GPS and timing first</p></div><button id="planRouteBtn" class="btn primary compact">Plan saved route</button></div>
+          <div class="field-tool-card order-tool"><div><small>DISTRIBUTOR ORDERS</small><strong id="todayOrderCount">0</strong><p><span id="todayOrderValue">₹0</span> POB today</p></div><button id="newOrderBtn" class="btn primary compact">+ Order</button></div>
+        </div>
+
         <div class="section-head"><div><h2>Today’s calls</h2><p>Recent doctor–chemist meetings with GPS</p></div><button class="text-btn" data-nav="visits">View all</button></div>
         <div id="todayActivityList" class="stack-list"></div>
+
+        <div class="section-head"><div><h2>Today’s distributor orders</h2><p>POB with product, scheme and distributor</p></div><button class="text-btn" id="newOrderBtn2" data-action="new-order">Add</button></div>
+        <div id="recentOrderList" class="stack-list"></div>
 
         <div class="section-head"><div><h2>Follow-ups</h2><p>Commitments requiring action</p></div></div>
         <div id="nextActionsList" class="stack-list"></div>
@@ -95,9 +118,17 @@
       <section class="page" data-page="tools">
         <div class="page-title-row"><div><h1>Tools & Profile</h1><p>Import new lists, backup and report settings</p></div></div>
 
+        <div class="settings-card-grid business-tools">
+          <button class="settings-card action-card" id="manageDistributorsBtn"><span>DS</span><div><h3>Distributor setup</h3><p id="distributorCountText">0 distributors</p></div></button>
+          <button class="settings-card action-card" id="manageSchemesBtn"><span>%</span><div><h3>Date-wise offers</h3><p id="schemeCountText">0 active schemes</p></div></button>
+          <button class="settings-card action-card" data-action="nearby-hospitals"><span>◎</span><div><h3>Nearby hospital discovery</h3><p>Current GPS → hospital → doctor</p></div></button>
+          <button class="settings-card action-card" data-action="plan-route"><span>⌖</span><div><h3>Saved hospital route</h3><p>Timing + verified hospital locations; no live GPS</p></div></button>
+          <button class="settings-card action-card" data-action="new-order"><span>₹</span><div><h3>New POB order</h3><p>Chemist → distributor → products</p></div></button>
+        </div>
+
         <div class="settings-card import-card">
           <div class="settings-icon">XL</div>
-          <div class="settings-copy"><h3>Import new doctor / chemist data</h3><p>Import new doctor and chemist lists anytime. Existing links, GPS and meeting history stay safe.</p></div>
+          <div class="settings-copy"><h3>Import doctor / chemist / distributor data</h3><p>Import doctor, chemist and distributor lists anytime. Existing links, GPS, orders and meeting history stay safe.</p></div>
           <label class="btn primary compact file-btn">Choose files<input id="importFile" type="file" accept=".xlsx,.xls,.csv,.json" multiple /></label>
         </div>
         <button id="loadBundledBtn" class="btn secondary full">Load the supplied Excel files</button>
@@ -107,7 +138,9 @@
         <div class="settings-card-grid">
           <button class="settings-card action-card" id="exportJsonBtn"><span>⇩</span><div><h3>Full backup</h3><p>Doctors, chemists, GPS, meetings and settings</p></div></button>
           <button class="settings-card action-card" id="exportCsvBtn"><span>▦</span><div><h3>Export CSV</h3><p>Doctor, chemist and linked master</p></div></button>
-          <button class="settings-card action-card" id="restoreBtn"><span>⇧</span><div><h3>Restore backup</h3><p>Import MR Daily Auto JSON</p></div></button>
+          <button class="settings-card action-card" id="exportXlsxBtn"><span>XL</span><div><h3>Export full XLSX</h3><p>Doctors, chemists, distributors, orders, schemes, visits and route</p></div></button>
+          <button class="settings-card action-card featured-report" id="companyReportPackBtn"><span>4X</span><div><h3>Generate 4 company files</h3><p>Lost Prescriber, MY Z & NICU, Kunjan Compilation and GUJ Sales</p></div></button>
+          <button class="settings-card action-card" id="restoreBtn"><span>⇧</span><div><h3>Restore backup</h3><p>Import MR Machine JSON</p></div></button>
           <input id="restoreInput" type="file" accept=".json" hidden />
           <button class="settings-card action-card" id="installBtn"><span>⬇</span><div><h3>Install app</h3><p>Add to phone home screen</p></div></button>
         </div>

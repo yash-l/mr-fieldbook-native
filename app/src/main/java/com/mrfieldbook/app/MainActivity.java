@@ -5,10 +5,14 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ApplicationInfo;
 import android.net.Uri;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.speech.RecognitionListener;
+import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -25,16 +29,29 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
 
+import com.google.android.gms.maps.model.LatLng;
+import com.google.android.libraries.places.api.Places;
+import com.google.android.libraries.places.api.model.CircularBounds;
+import com.google.android.libraries.places.api.model.OpeningHours;
+import com.google.android.libraries.places.api.model.Place;
+import com.google.android.libraries.places.api.net.PlacesClient;
+import com.google.android.libraries.places.api.net.SearchNearbyRequest;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 public final class MainActivity extends Activity {
     private static final int REQUEST_FILES = 1001;
     private static final int REQUEST_SAVE = 1002;
     private static final int REQUEST_LOCATION = 1003;
+    private static final int REQUEST_AUDIO = 1004;
 
     private WebView webView;
     private ValueCallback<Uri[]> fileCallback;
@@ -43,9 +60,17 @@ public final class MainActivity extends Activity {
     private String pendingSaveName;
     private String pendingSaveMime;
     private String pendingSaveContent;
+    private byte[] pendingSaveBytes;
     private String pendingGpsPrefix;
     private LocationManager locationManager;
     private LocationListener activeLocationListener;
+    private SpeechRecognizer speechRecognizer;
+    private Intent speechIntent;
+    private boolean keepListening;
+    private boolean restartingSpeech;
+    private String voicePrefix = "voice";
+    private PlacesClient placesClient;
+    private String placesInitError = "Google Places API key is not configured.";
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     @Override
@@ -65,6 +90,8 @@ public final class MainActivity extends Activity {
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
+
+        initializePlacesClient();
 
         webView.addJavascriptInterface(new AndroidBridge(), "AndroidBridge");
         webView.setWebViewClient(new AppWebViewClient());
@@ -112,7 +139,8 @@ public final class MainActivity extends Activity {
             if (resultCode == RESULT_OK && data != null && data.getData() != null) {
                 try (OutputStream out = getContentResolver().openOutputStream(data.getData())) {
                     if (out == null) throw new IllegalStateException("Cannot create file");
-                    out.write(pendingSaveContent.getBytes(StandardCharsets.UTF_8));
+                    if (pendingSaveBytes != null) out.write(pendingSaveBytes);
+                    else out.write((pendingSaveContent == null ? "" : pendingSaveContent).getBytes(StandardCharsets.UTF_8));
                     out.flush();
                     Toast.makeText(this, "Saved successfully", Toast.LENGTH_SHORT).show();
                 } catch (Exception error) {
@@ -122,6 +150,7 @@ public final class MainActivity extends Activity {
             pendingSaveName = null;
             pendingSaveMime = null;
             pendingSaveContent = null;
+            pendingSaveBytes = null;
         }
     }
 
@@ -141,9 +170,95 @@ public final class MainActivity extends Activity {
                 if (granted) startNativeLocation(prefix);
                 else sendNativeLocation(prefix, null, "Location permission denied. Allow Location for this app.");
             }
+            return;
+        }
+        if (requestCode == REQUEST_AUDIO) {
+            boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            if (granted) startVoiceRecognition(voicePrefix);
+            else sendVoiceEvent(voicePrefix, "error", "", false, "Microphone permission denied. Allow microphone access in app settings.");
         }
     }
 
+    private void initializePlacesClient() {
+        try {
+            ApplicationInfo appInfo = getPackageManager().getApplicationInfo(getPackageName(), PackageManager.GET_META_DATA);
+            String apiKey = appInfo.metaData == null ? "" : appInfo.metaData.getString("com.google.android.geo.API_KEY", "");
+            if (apiKey == null || apiKey.trim().isEmpty() || "NO_KEY".equals(apiKey)) {
+                placesInitError = "Live search is not configured. Add the PLACES_API_KEY GitHub secret, then rebuild.";
+                return;
+            }
+            if (!Places.isInitialized()) Places.initializeWithNewPlacesApiEnabled(getApplicationContext(), apiKey.trim());
+            placesClient = Places.createClient(this);
+            placesInitError = "";
+        } catch (Exception error) {
+            placesClient = null;
+            placesInitError = error.getMessage() == null ? "Google Places could not start." : error.getMessage();
+        }
+    }
+
+    private void searchNearbyHospitals(String prefix, double latitude, double longitude, double radiusMeters) {
+        if (placesClient == null) {
+            sendNearbyPlaces(prefix, null, placesInitError);
+            return;
+        }
+        try {
+            double safeRadius = Math.max(100d, Math.min(50000d, radiusMeters));
+            List<Place.Field> fields = Arrays.asList(
+                    Place.Field.ID,
+                    Place.Field.DISPLAY_NAME,
+                    Place.Field.FORMATTED_ADDRESS,
+                    Place.Field.LOCATION,
+                    Place.Field.PRIMARY_TYPE,
+                    Place.Field.OPENING_HOURS
+            );
+            CircularBounds circle = CircularBounds.newInstance(new LatLng(latitude, longitude), safeRadius);
+            SearchNearbyRequest request = SearchNearbyRequest.builder(circle, fields)
+                    .setIncludedTypes(Arrays.asList("hospital", "medical_clinic", "doctor"))
+                    .setMaxResultCount(20)
+                    .setRankPreference(SearchNearbyRequest.RankPreference.DISTANCE)
+                    .setRegionCode("IN")
+                    .build();
+            placesClient.searchNearby(request)
+                    .addOnSuccessListener(response -> sendNearbyPlaces(prefix, response.getPlaces(), null))
+                    .addOnFailureListener(error -> sendNearbyPlaces(prefix, null,
+                            error.getMessage() == null ? "Nearby hospital search failed." : error.getMessage()));
+        } catch (Exception error) {
+            sendNearbyPlaces(prefix, null, error.getMessage() == null ? "Nearby hospital search failed." : error.getMessage());
+        }
+    }
+
+    private void sendNearbyPlaces(String prefix, List<Place> places, String error) {
+        JSONArray rows = new JSONArray();
+        if (places != null) {
+            for (Place place : places) {
+                try {
+                    JSONObject row = new JSONObject();
+                    row.put("placeId", place.getId() == null ? "" : place.getId());
+                    row.put("name", place.getDisplayName() == null ? "Hospital / clinic" : place.getDisplayName());
+                    row.put("address", place.getFormattedAddress() == null ? "" : place.getFormattedAddress());
+                    row.put("primaryType", place.getPrimaryType() == null ? "" : place.getPrimaryType());
+                    LatLng location = place.getLocation();
+                    if (location != null) {
+                        row.put("latitude", location.latitude);
+                        row.put("longitude", location.longitude);
+                    }
+                    JSONArray hours = new JSONArray();
+                    OpeningHours openingHours = place.getOpeningHours();
+                    if (openingHours != null && openingHours.getWeekdayText() != null) {
+                        for (String line : openingHours.getWeekdayText()) hours.put(line);
+                    }
+                    row.put("openingHours", hours);
+                    rows.put(row);
+                } catch (Exception ignored) {}
+            }
+        }
+        String script = "window.__mrNearbyPlaces(" +
+                JSONObject.quote(prefix == null ? "nearby" : prefix) + "," +
+                (error == null ? "true" : "false") + "," +
+                JSONObject.quote(rows.toString()) + "," +
+                JSONObject.quote(error == null ? "" : error) + ");";
+        runOnUiThread(() -> webView.evaluateJavascript(script, null));
+    }
 
     private void requestNativeLocation(String prefix) {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
@@ -212,6 +327,146 @@ public final class MainActivity extends Activity {
                     org.json.JSONObject.quote(error == null ? "GPS unavailable" : error) + ");";
         }
         runOnUiThread(() -> webView.evaluateJavascript(script, null));
+    }
+
+    private void requestVoiceRecognition(String prefix) {
+        voicePrefix = prefix == null || prefix.trim().isEmpty() ? "voice" : prefix;
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            sendVoiceEvent(voicePrefix, "error", "", false, "Speech recognition is not available on this phone.");
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_AUDIO);
+            return;
+        }
+        startVoiceRecognition(voicePrefix);
+    }
+
+    private void ensureSpeechRecognizer() {
+        if (speechRecognizer != null) return;
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+        speechRecognizer.setRecognitionListener(new RecognitionListener() {
+            @Override public void onReadyForSpeech(Bundle params) {
+                restartingSpeech = false;
+                sendVoiceEvent(voicePrefix, "listening", "", false, "");
+            }
+            @Override public void onBeginningOfSpeech() {
+                sendVoiceEvent(voicePrefix, "speech", "", false, "");
+            }
+            @Override public void onRmsChanged(float rmsdB) {}
+            @Override public void onBufferReceived(byte[] buffer) {}
+            @Override public void onEndOfSpeech() {
+                sendVoiceEvent(voicePrefix, "processing", "", false, "");
+            }
+            @Override public void onError(int error) {
+                String message = speechErrorMessage(error);
+                boolean recoverable = error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT || error == SpeechRecognizer.ERROR_CLIENT;
+                if (keepListening && recoverable) {
+                    restartSpeechSoon();
+                } else {
+                    keepListening = false;
+                    sendVoiceEvent(voicePrefix, "error", "", false, message);
+                }
+            }
+            @Override public void onResults(Bundle results) {
+                ArrayList<String> matches = results == null ? null : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                String text = matches == null || matches.isEmpty() ? "" : matches.get(0);
+                if (!text.trim().isEmpty()) sendVoiceEvent(voicePrefix, "result", text, true, "");
+                if (keepListening) restartSpeechSoon();
+                else sendVoiceEvent(voicePrefix, "stopped", "", false, "");
+            }
+            @Override public void onPartialResults(Bundle partialResults) {
+                ArrayList<String> matches = partialResults == null ? null : partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                String text = matches == null || matches.isEmpty() ? "" : matches.get(0);
+                if (!text.trim().isEmpty()) sendVoiceEvent(voicePrefix, "partial", text, false, "");
+            }
+            @Override public void onEvent(int eventType, Bundle params) {}
+        });
+
+        speechIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        speechIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        speechIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN");
+        speechIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-IN");
+        speechIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        speechIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
+        speechIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2200L);
+        speechIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1400L);
+        speechIntent.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
+    }
+
+    private void startVoiceRecognition(String prefix) {
+        voicePrefix = prefix == null || prefix.trim().isEmpty() ? "voice" : prefix;
+        try {
+            ensureSpeechRecognizer();
+            keepListening = true;
+            restartingSpeech = false;
+            speechRecognizer.cancel();
+            speechRecognizer.startListening(speechIntent);
+            sendVoiceEvent(voicePrefix, "starting", "", false, "");
+        } catch (Exception error) {
+            keepListening = false;
+            sendVoiceEvent(voicePrefix, "error", "", false, error.getMessage() == null ? "Could not start microphone." : error.getMessage());
+        }
+    }
+
+    private void restartSpeechSoon() {
+        if (!keepListening || restartingSpeech) return;
+        restartingSpeech = true;
+        mainHandler.postDelayed(() -> {
+            if (!keepListening || speechRecognizer == null) return;
+            try {
+                speechRecognizer.cancel();
+                speechRecognizer.startListening(speechIntent);
+            } catch (Exception error) {
+                keepListening = false;
+                restartingSpeech = false;
+                sendVoiceEvent(voicePrefix, "error", "", false, "Microphone restart failed. Tap Start again.");
+            }
+        }, 350L);
+    }
+
+    private void stopVoiceRecognition() {
+        keepListening = false;
+        restartingSpeech = false;
+        if (speechRecognizer != null) {
+            try { speechRecognizer.stopListening(); } catch (Exception ignored) {}
+        }
+        sendVoiceEvent(voicePrefix, "stopped", "", false, "");
+    }
+
+    private String speechErrorMessage(int error) {
+        switch (error) {
+            case SpeechRecognizer.ERROR_AUDIO: return "Microphone audio error.";
+            case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS: return "Microphone permission is required.";
+            case SpeechRecognizer.ERROR_NETWORK:
+            case SpeechRecognizer.ERROR_NETWORK_TIMEOUT: return "Speech service needs network or an offline language pack.";
+            case SpeechRecognizer.ERROR_RECOGNIZER_BUSY: return "Speech recognizer is busy. Stop and start again.";
+            case SpeechRecognizer.ERROR_SERVER: return "Speech service error. Retry.";
+            case SpeechRecognizer.ERROR_SPEECH_TIMEOUT: return "No speech heard. Continue speaking or tap Start.";
+            case SpeechRecognizer.ERROR_NO_MATCH: return "Could not understand that speech. Try again.";
+            default: return "Voice capture stopped. Tap Start to continue.";
+        }
+    }
+
+    private void sendVoiceEvent(String prefix, String state, String text, boolean isFinal, String error) {
+        String script = "window.__mrVoiceUpdate(" +
+                org.json.JSONObject.quote(prefix == null ? "voice" : prefix) + "," +
+                org.json.JSONObject.quote(state == null ? "" : state) + "," +
+                org.json.JSONObject.quote(text == null ? "" : text) + "," +
+                (isFinal ? "true" : "false") + "," +
+                org.json.JSONObject.quote(error == null ? "" : error) + ");";
+        runOnUiThread(() -> webView.evaluateJavascript(script, null));
+    }
+
+    @Override
+    protected void onDestroy() {
+        keepListening = false;
+        if (speechRecognizer != null) {
+            try { speechRecognizer.cancel(); } catch (Exception ignored) {}
+            speechRecognizer.destroy();
+            speechRecognizer = null;
+        }
+        super.onDestroy();
     }
 
     private void openExternal(String url) {
@@ -286,6 +541,27 @@ public final class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public boolean hasPlacesApi() {
+            return placesClient != null;
+        }
+
+        @JavascriptInterface
+        public void searchNearbyHospitals(String prefix, double latitude, double longitude, double radiusMeters) {
+            runOnUiThread(() -> MainActivity.this.searchNearbyHospitals(
+                    prefix == null ? "nearby" : prefix, latitude, longitude, radiusMeters));
+        }
+
+        @JavascriptInterface
+        public void startVoiceCapture(String prefix) {
+            runOnUiThread(() -> requestVoiceRecognition(prefix));
+        }
+
+        @JavascriptInterface
+        public void stopVoiceCapture() {
+            runOnUiThread(MainActivity.this::stopVoiceRecognition);
+        }
+
+        @JavascriptInterface
         public String sha256(String value) {
             try {
                 MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -324,6 +600,7 @@ public final class MainActivity extends Activity {
                 pendingSaveName = fileName == null || fileName.trim().isEmpty() ? "MR-Daily-Auto-Backup.json" : fileName;
                 pendingSaveMime = mimeType == null || mimeType.trim().isEmpty() ? "text/plain" : mimeType;
                 pendingSaveContent = content == null ? "" : content;
+                pendingSaveBytes = null;
 
                 Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
                 intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -331,6 +608,48 @@ public final class MainActivity extends Activity {
                 intent.putExtra(Intent.EXTRA_TITLE, pendingSaveName);
                 startActivityForResult(intent, REQUEST_SAVE);
             });
+        }
+
+        @JavascriptInterface
+        public void saveWorkbook(String fileName, String workbookJson) {
+            try {
+                byte[] workbook = XlsxExporter.create(workbookJson);
+                runOnUiThread(() -> {
+                    pendingSaveName = fileName == null || fileName.trim().isEmpty() ? "MR-Field-Data.xlsx" : fileName;
+                    pendingSaveMime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+                    pendingSaveContent = null;
+                    pendingSaveBytes = workbook;
+
+                    Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType(pendingSaveMime);
+                    intent.putExtra(Intent.EXTRA_TITLE, pendingSaveName);
+                    startActivityForResult(intent, REQUEST_SAVE);
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Excel export failed: " + error.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        }
+
+        @JavascriptInterface
+        public void saveReportPack(String fileName, String reportPackJson) {
+            try {
+                byte[] reportPack = ReportPackExporter.create(reportPackJson);
+                runOnUiThread(() -> {
+                    pendingSaveName = fileName == null || fileName.trim().isEmpty() ? "MR-Company-Report-Pack.zip" : fileName;
+                    pendingSaveMime = "application/zip";
+                    pendingSaveContent = null;
+                    pendingSaveBytes = reportPack;
+
+                    Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType(pendingSaveMime);
+                    intent.putExtra(Intent.EXTRA_TITLE, pendingSaveName);
+                    startActivityForResult(intent, REQUEST_SAVE);
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Report pack export failed: " + error.getMessage(), Toast.LENGTH_LONG).show());
+            }
         }
 
         @JavascriptInterface
