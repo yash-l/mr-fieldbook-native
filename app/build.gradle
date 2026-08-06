@@ -1,8 +1,8 @@
-def placesApiKey = project.findProperty('PLACES_API_KEY') ?: System.getenv('PLACES_API_KEY') ?: 'NO_KEY'
-
 plugins {
     id 'com.android.application'
 }
+
+def placesApiKey = project.findProperty('PLACES_API_KEY') ?: System.getenv('PLACES_API_KEY') ?: 'NO_KEY'
 
 android {
     namespace 'com.mrfieldbook.app'
