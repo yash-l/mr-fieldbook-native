@@ -2,7 +2,7 @@
   'use strict';
 
   const STORE_KEY = 'mr-daily-auto-v3';
-  const APP_VERSION = 14.4;
+  const APP_VERSION = 14.5;
   const METRICS = [
     ['calls', 'Calls'],
     ['inputs', 'Input Distributed'],
@@ -1384,6 +1384,147 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
 
   function haptic(kind='light'){try{if(window.AndroidBridge?.haptic)window.AndroidBridge.haptic(kind);}catch(_){}}
 
+  const SAN_SPECIALTIES=['CONPHY','DIET','GENPHY','GPHY','GYNAEC','MATRON','PED'];
+  const SAN_CLASSES=['PRESCR','DISPEN'];
+  const SAN_BRAND_PATTERN=/\b(?:MUM[ -]?MUM|HUMYL|ZEFRICH|ZIORAL|CALYUMM|SIMYL|R5\s*IMMUNITY|LBW|MCT|IMMUNITY\s*DRINK)\b/i;
+  const SAN_HOSPITAL_PATTERN=/\b(?:hospital|hosp\b|clinic|nursing\s*home|maternity|medical\s*hospital|health\s*care|healthcare|children|child\s*care|neonatal|women(?:'s|s)?|ivf|dispensary|sonography|centre|center)\b/i;
+  const SAN_ADDRESS_PATTERN=/\b(?:road|rd\b|street|st\b|floor|flr\b|opp\b|opposite|near|nr\b|behind|b\/h|beside|cross\s*road|char\s*rasta|complex|mall|arcade|apartment|appt|society|bungalow|chambers|plaza|avenue|circle|nagar|gam\b|village|highway|no\.?\s*\d|\d+(?:st|nd|rd|th)?\s*floor)\b/i;
+  function isSanBulkDoctorText(text){
+    const source=String(text||'');
+    return /Listed Doctor Details\s*\(Rep:/i.test(source)&&/FieldForce Name/i.test(source)&&/Doctor Name/i.test(source)&&/Speciality/i.test(source);
+  }
+  function sanTokens(value){
+    return String(value||'').replace(/\r/g,'\n').split(/\n|\t/).map(x=>clean(x.replace(/^\*\*|\*\*$/g,''))).filter(Boolean);
+  }
+  function sanHospitalScore(value){
+    const v=clean(value);if(!v)return -99;let score=0;
+    if(SAN_HOSPITAL_PATTERN.test(v))score+=8;
+    if(!/\d/.test(v))score+=2;
+    if(v.length<=75)score+=1;
+    if(SAN_ADDRESS_PATTERN.test(v))score-=3;
+    if(/^[A-Z .&'-]{3,}$/i.test(v))score+=1;
+    return score;
+  }
+  function splitSanMidFields(values){
+    const mid=(values||[]).map(clean).filter(Boolean);
+    if(!mid.length)return {address:'',hospital:'',hospitalAddress:'',confidence:'low'};
+    let best=-1,bestScore=-99;
+    mid.forEach((v,i)=>{const score=sanHospitalScore(v);if(score>bestScore){best=i;bestScore=score;}});
+    let hospital='',hospitalAddress='',address='',confidence='medium';
+    if(bestScore>=6){
+      hospital=mid[best];
+      address=mid.slice(0,best).join(', ');
+      hospitalAddress=mid.slice(best+1).join(', ');
+      confidence=bestScore>=9?'high':'medium';
+    }else if(mid.length===1){
+      if(SAN_ADDRESS_PATTERN.test(mid[0]))address=mid[0];else hospital=mid[0];
+      confidence='low';
+    }else{
+      // Be conservative: without a hospital/clinic keyword, never invent a hospital name.
+      // SAN often omits empty Hospital Name cells, leaving personal and hospital addresses adjacent.
+      hospital='';
+      address=mid[0]||'';
+      hospitalAddress=mid.slice(1).join(', ');
+      confidence='low';
+    }
+    if(!hospitalAddress&&hospital&&address&&best===0)hospitalAddress=address;
+    return {address,hospital,hospitalAddress,confidence};
+  }
+  function sanPhones(values){
+    const out=[],invalid=[];
+    for(const raw of values||[]){
+      const value=clean(raw),digits=value.replace(/\D/g,'');
+      if(!digits)continue;
+      const parts=value.split(/[\/,&\s]+/).map(x=>x.replace(/\D/g,'')).filter(Boolean);
+      let found=false;
+      for(const p of parts){if(/^[6-9]\d{9}$/.test(p)){out.push(p);found=true;}}
+      if(!found&&digits.length===10&&/^[6-9]/.test(digits)){out.push(digits);found=true;}
+      if(!found&&digits.length>=8)invalid.push(value);
+    }
+    return {valid:[...new Set(out)],invalid:[...new Set(invalid)]};
+  }
+  function normalizeSanBrand(value){return clean(value).replace(/\s+/g,' ').toUpperCase();}
+  function parseSanDoctorSection(sectionText,speciality,repName){
+    const tokens=sanTokens(sectionText);
+    const headerEnd=Math.max(tokens.lastIndexOf('Focus Brand 5'),tokens.lastIndexOf('Focus Brand 4'),tokens.lastIndexOf('Focus Brand 3'));
+    const body=headerEnd>=0?tokens.slice(headerEnd+1):tokens;
+    const anchors=[];body.forEach((v,i)=>{if(norm(v)===norm(repName))anchors.push(i);});
+    const records=[];
+    for(let a=0;a<anchors.length;a++){
+      const start=anchors[a],end=a+1<anchors.length?anchors[a+1]:body.length;
+      const row=body.slice(start,end);
+      const designation=clean(row[1]),hq=clean(row[2]),name=clean(row[3]),qualification=clean(row[4]);
+      if(!name||!designation||!hq||SAN_SPECIALTIES.includes(name.toUpperCase()))continue;
+      const specIndex=row.findIndex((v,i)=>i>4&&SAN_SPECIALTIES.includes(clean(v).toUpperCase()));
+      if(specIndex<0)continue;
+      const detectedSpeciality=clean(row[specIndex]).toUpperCase()||speciality;
+      let cursor=specIndex+1;
+      const category=/^(?:C|NC)$/i.test(row[cursor]||'')?clean(row[cursor++]):'';
+      const doctorClass=SAN_CLASSES.includes(clean(row[cursor]).toUpperCase())?clean(row[cursor++]).toUpperCase():'';
+      const area=clean(row[cursor++]||'');
+      const town=clean(row[cursor++]||'');
+      const townType=/^(?:HQ|EX)$/i.test(row[cursor]||'')?clean(row[cursor++]).toUpperCase():'';
+      const mid=splitSanMidFields(row.slice(5,specIndex));
+      const tail=row.slice(cursor);
+      const phoneInfo=sanPhones(tail);
+      const email=clean(tail.find(v=>/@/.test(v))||'');
+      const invalidEmail=email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+      const focusBrands=[...new Set(tail.filter(v=>SAN_BRAND_PATTERN.test(v)).map(normalizeSanBrand))];
+      const mobile=phoneInfo.valid.join('/');
+      const issues=[];
+      if(!mid.hospital)issues.push('Hospital missing');
+      if(!mid.hospitalAddress&&!mid.address)issues.push('Address missing');
+      if(phoneInfo.invalid.length)issues.push('Mobile needs review');
+      if(invalidEmail)issues.push('Email needs review');
+      records.push({
+        name,qualification,hospital:mid.hospital,address:mid.address,hospitalAddress:mid.hospitalAddress,
+        hq,area:area||town,town,townType,speciality:detectedSpeciality,category,doctorClass,
+        mobile,email:invalidEmail?'':email,rawMobile:phoneInfo.invalid.join(' / '),rawEmail:invalidEmail?email:'',focusBrands,
+        meetingDays:[],meetingFrom:'',meetingTo:'',linkedChemistId:'',chemistName:'',latitude:'',longitude:'',
+        locationVerificationStatus:'pending',locationSource:'SAN copied address',sanConfidence:mid.confidence,
+        sanIssues:issues,sourceFiles:['SAN copied doctor master'],tags:['SAN',detectedSpeciality]
+      });
+    }
+    return records;
+  }
+  function parseSanDoctorMaster(text){
+    const source=String(text||'').replace(/\r/g,'');
+    const heading=/Listed Doctor Details\s*\(Rep:\s*([^/\n]+?)\s*\/\s*Speciality:\s*([A-Z]+)\)/gi;
+    const matches=[...source.matchAll(heading)],doctors=[];let detectedRep='',detectedHq='';
+    matches.forEach((m,i)=>{
+      const rep=clean(m[1]),speciality=clean(m[2]).toUpperCase(),start=m.index+m[0].length,end=i+1<matches.length?matches[i+1].index:source.length;
+      detectedRep=detectedRep||rep;
+      doctors.push(...parseSanDoctorSection(source.slice(start,end),speciality,rep));
+    });
+    const seen=new Map(),duplicates=[];
+    doctors.forEach((d,i)=>{
+      detectedHq=detectedHq||d.hq;
+      const key=`${norm(d.name)}|${norm(d.hospital)}|${norm(d.town||d.area)}`;
+      if(seen.has(key))duplicates.push({first:seen.get(key),duplicate:i,key});else seen.set(key,i);
+    });
+    const unique=doctors.filter((_,i)=>!duplicates.some(x=>x.duplicate===i));
+    const counts={};SAN_SPECIALTIES.forEach(x=>counts[x]=0);unique.forEach(d=>counts[d.speciality]=(counts[d.speciality]||0)+1);
+    const issues={missingHospital:unique.filter(d=>!d.hospital).length,missingAddress:unique.filter(d=>!d.hospitalAddress&&!d.address).length,invalidMobile:unique.filter(d=>d.rawMobile).length,invalidEmail:unique.filter(d=>d.rawEmail).length,duplicates:duplicates.length};
+    return {repName:detectedRep,hq:detectedHq,doctors:unique,rawCount:doctors.length,counts,issues,duplicates};
+  }
+  function sanBulkSummaryHtml(parsed){
+    const countPills=Object.entries(parsed.counts).filter(([,v])=>v).map(([k,v])=>`<span><b>${esc(v)}</b>${esc(k)}</span>`).join('');
+    const issueTotal=Object.values(parsed.issues).reduce((a,b)=>a+num(b),0);
+    const samples=parsed.doctors.slice(0,8).map(d=>`<div class="san-bulk-row"><div><strong>${esc(d.name)}</strong><small>${esc([d.speciality,d.hospital||'Hospital pending',d.town||d.area].filter(Boolean).join(' • '))}</small></div><em class="${d.sanIssues.length?'review':'ready'}">${d.sanIssues.length?`${d.sanIssues.length} review`:'Ready'}</em></div>`).join('');
+    return `<div class="san-bulk-hero"><small>SAN DOCTOR MASTER DETECTED</small><strong>${esc(parsed.doctors.length)} doctors ready for review</strong><p>${esc(parsed.repName||'Rep not detected')} • ${esc(parsed.hq||'HQ not detected')}</p></div><div class="san-count-pills">${countPills}</div><div class="san-bulk-metrics"><div><b>${esc(parsed.doctors.length)}</b><span>Unique doctors</span></div><div><b>${esc(issueTotal)}</b><span>Review flags</span></div><div><b>${esc(parsed.issues.duplicates)}</b><span>Duplicates merged</span></div><div><b>${esc(parsed.issues.missingHospital)}</b><span>Hospital missing</span></div><div><b>${esc(parsed.issues.invalidMobile)}</b><span>Mobile review</span></div><div><b>${esc(parsed.issues.invalidEmail)}</b><span>Email review</span></div></div><div class="detail-section"><h4>Import preview</h4><div class="san-bulk-list">${samples}</div>${parsed.doctors.length>8?`<small class="muted-line">+ ${esc(parsed.doctors.length-8)} more doctors</small>`:''}</div><div class="notice">Doctor, qualification, hospital/address, speciality, category/class and focus brands will be imported. This SAN list has no chemist mapping, meeting timing or GPS, so those fields stay pending. Profile name/HQ will not be overwritten automatically.</div>`;
+  }
+  function importSanDoctorMaster(parsed){
+    const result={added:0,updated:0,products:0,review:0};
+    parsed.doctors.forEach(rec=>{
+      const mapped={...rec,address:clean(rec.hospitalAddress||rec.address),doctorAddress:clean(rec.address),hospitalAddress:clean(rec.hospitalAddress),notes:rec.sanIssues.length?`SAN import review: ${rec.sanIssues.join('; ')}`:'',campaign:'SAN Doctor Master'};
+      const r=upsertDoctor(mapped);result[r.mode==='added'?'added':'updated']++;
+      rec.focusBrands.forEach(name=>{if(upsertProduct(name))result.products++;});
+      if(rec.sanIssues.length)result.review++;
+    });
+    state.imports.push({id:uid('imp'),file:'SAN copied doctor master',date:new Date().toISOString(),summary:`${result.added} doctors added, ${result.updated} updated, ${result.review} need review, ${result.products} focus brands added.`});
+    saveState();return result;
+  }
+
   function sanDetectedHtml(parsed){
     const timing=[parsed.meetingFrom&&parsed.meetingTo?`${timeLabel(parsed.meetingFrom)}–${timeLabel(parsed.meetingTo)}`:'',parsed.meetingFrom2&&parsed.meetingTo2?`${timeLabel(parsed.meetingFrom2)}–${timeLabel(parsed.meetingTo2)}`:''].filter(Boolean).join(' / ');
     const days=parsed.meetingDays?.length?parsed.meetingDays.map(x=>DAY_NAMES[x]).join(', '):'Not detected';
@@ -1392,9 +1533,18 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
   }
 
   function openSanClipboardReview(text){
-    text=clean(text);if(!text){toast('No copied SAN text found.');return;}
+    text=String(text||'').trim();if(!text){toast('No copied SAN text found.');return;}
+    if(isSanBulkDoctorText(text)){
+      let parsed=parseSanDoctorMaster(text);
+      openSheet('Import SAN doctor master','Bulk list detected. Review counts and quality flags before importing.',`<div id="sanBulkSummary">${sanBulkSummaryHtml(parsed)}</div><details class="form-disclosure"><summary>View or correct copied text</summary><label class="field-block"><span class="field-caption">Copied SAN doctor list</span><textarea id="sanClipboardText" rows="9">${esc(text)}</textarea></label></details><div class="button-row"><button id="sanReparseBtn" class="btn secondary">Re-scan list</button><button id="sanSaveInboxBtn" class="btn secondary">Save raw capture</button></div><button id="sanBulkImportBtn" class="btn primary full">Import ${esc(parsed.doctors.length)} doctors</button><div class="notice">Import merges exact doctor + hospital + town matches. Existing meetings, chemist links and verified GPS are preserved.</div>`);
+      const raw=()=>String($('#sanClipboardText').value||'').trim();
+      $('#sanReparseBtn').addEventListener('click',()=>{parsed=parseSanDoctorMaster(raw());$('#sanBulkSummary').innerHTML=sanBulkSummaryHtml(parsed);$('#sanBulkImportBtn').textContent=`Import ${parsed.doctors.length} doctors`;haptic();});
+      $('#sanSaveInboxBtn').addEventListener('click',()=>{const value=raw();if(!value){toast('Paste text first.');return;}state.captures.push({id:uid('cap'),date:new Date().toISOString(),source:'SAN bulk doctor master',transcript:value,parsed:{bulk:true,count:parsed.doctors.length,counts:parsed.counts,issues:parsed.issues},loggedMeeting:false});saveState();haptic('strong');toast('Raw SAN list saved to capture inbox.');});
+      $('#sanBulkImportBtn').addEventListener('click',()=>{parsed=parseSanDoctorMaster(raw());if(!parsed.doctors.length){toast('No doctor rows detected.');return;}const result=importSanDoctorMaster(parsed);closeSheet();haptic('strong');navigate('doctors');toast(`${result.added} doctors added, ${result.updated} updated. ${result.review} need review.`);});
+      return;
+    }
     const parsed=parseVoiceDetails(text);
-    openSheet('Review SAN copied details','Nothing is saved until you confirm. Detected values can be checked in one place.',`<div id="sanDetectedSummary">${sanDetectedHtml(parsed)}</div><label class="field-block"><span class="field-caption">Copied SAN text</span><textarea id="sanClipboardText" rows="7">${esc(text)}</textarea></label><div class="button-row"><button id="sanReparseBtn" class="btn secondary">Re-detect details</button><button id="sanSaveInboxBtn" class="btn secondary">Save to capture inbox</button></div><button id="sanUseMeetingBtn" class="btn primary full">Use these details in Log Meeting</button><div class="notice">Flow: SAN me text select → Copy → MR bubble → Paste clipboard → Send to MR → Review → Log Meeting. Overlay screen ko read ya scrape nahi karta.</div>`);
+    openSheet('Review SAN copied details','Nothing is saved until you confirm. Detected values can be checked in one place.',`<div id="sanDetectedSummary">${sanDetectedHtml(parsed)}</div><label class="field-block"><span class="field-caption">Copied SAN text</span><textarea id="sanClipboardText" rows="7">${esc(text)}</textarea></label><div class="button-row"><button id="sanReparseBtn" class="btn secondary">Re-detect details</button><button id="sanSaveInboxBtn" class="btn secondary">Save to capture inbox</button></div><button id="sanUseMeetingBtn" class="btn primary full">Use these details in Log Meeting</button><div class="notice">Single-doctor flow: SAN me text select → Copy → MR bubble → Paste clipboard → Send to MR → Review → Log Meeting.</div>`);
     const raw=()=>clean($('#sanClipboardText').value);
     $('#sanReparseBtn').addEventListener('click',()=>{$('#sanDetectedSummary').innerHTML=sanDetectedHtml(parseVoiceDetails(raw()));haptic();});
     $('#sanSaveInboxBtn').addEventListener('click',()=>{const value=raw(),details=parseVoiceDetails(value);if(!value){toast('Paste text first.');return;}state.captures.push({id:uid('cap'),date:new Date().toISOString(),source:'SAN clipboard overlay',transcript:value,doctorId:details.doctorId||'',doctorName:details.doctorName||'',hospital:details.hospital||'',chemistId:details.chemistId||'',chemistName:details.chemistName||'',parsed:details,loggedMeeting:false});saveState();closeSheet();haptic('strong');toast('SAN details saved to capture inbox.');});

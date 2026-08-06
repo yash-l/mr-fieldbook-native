@@ -31,6 +31,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: MR-Machine-Intelligence-v14.4-APK
+          name: MR-Machine-Intelligence-v14.5-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error

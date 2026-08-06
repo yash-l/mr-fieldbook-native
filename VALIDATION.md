@@ -1,4 +1,4 @@
-# Validation — MR Machine Intelligence v14.4
+# Validation — MR Machine Intelligence v14.5
 
 ## Passed in this delivery
 
@@ -6,7 +6,7 @@
 - Android manifest and web manifest parse as XML/JSON.
 - `android.useAndroidX=true` remains enabled.
 - Gradle `plugins {}` block remains first in `app/build.gradle`.
-- App version is `14.4.0` / versionCode `144`.
+- App version is `14.5.0` / versionCode `145`.
 - Android manifest declares the visible overlay permission and Android 14 special-use foreground-service type.
 - SAN overlay service includes a draggable MR bubble, editable paste box, clipboard-on-tap action, send-to-app action and stop action.
 - SAN copied text is reviewed and parsed before it can pre-fill Log Meeting.
@@ -29,3 +29,5 @@
 ## Routing rule
 
 The selected start doctor/hospital is the origin. The next stop is the geographically nearest remaining verified hospital. After reaching that stop, the next selection is recalculated from that stop, continuing until all eligible stops are ordered. Timing conflicts are displayed but do not cause the route to jump over a nearer location. Google Maps calculates the final road route; in-app distance remains an approximate straight-line estimate.
+
+- SAN bulk detector and representative vertical/tabular doctor-master parser smoke-tested.

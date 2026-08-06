@@ -1,18 +1,19 @@
-e736001b0f218b7b38b4a285d2756eccfef368a06de68f2d716ee74e14612f3e  ./.github/workflows/build-apk.yml
+69d8bdc632701b817b6e3810325f5d5c3abfc652996b59a0fe7c0b5f977990ef  ./.github/workflows/build-apk.yml
 9d0c62b809cf774b889dd315c3197a82950013bf105360f012746240149e4f89  ./.gitignore
 f5054e9a8dbbe422960d739a79fdcbb60364db620fb6771af57c9780fc2a7d30  ./CHANGELOG-v14.3.md
 2e3a3134a2b810bc3e4d56e09be8e86319dbb9fb26eafbeefbb894bea1e06e58  ./CHANGELOG-v14.4.md
+70a99b11f503bc6c17945014a828e1ad6755a3e772c66e517fb533ba3481e179  ./CHANGELOG-v14.5.md
 49180dc44a4dc7acffcfca3b2e9846fcaad9c23d21af23d5923221b5f0166480  ./CHANGELOG-v14.md
 104abc8f0eaacc0cc88ee5089610aceeb8edb6999cc0494a71b478157685e671  ./GOOGLE-PLACES-SETUP.md
 2dae017c207494c4565e94b9e81ab622c61069ceb23b857f2f70a32996b7d456  ./IMPORT-TEMPLATE.csv
-0837b76bcdd1f77e61cc532c1a4c550f9c9f1753f3fa2f4742a3f6dded1ec781  ./QUICK-UPDATE-TERMUX.txt
-6bf1727be53a3bd5bd3d4b3c6293fa37957f9a55da62ecd4a7ab828205d84b0a  ./README.md
-453f2c2d97ca0cba272dc9d28392c59c37e491c56f691967a108aeca887e2e16  ./VALIDATION.md
+f40d8c68d34256741898af4536657497a69b2bc964d5f9c0d2276eaa376f81a7  ./QUICK-UPDATE-TERMUX.txt
+a4360ca5ae3e4565ec527afc974f1e2913f834e41f8f46a1220da14e705f9b63  ./README.md
+1d1abfc32ad84982876fc3d86ef20655e152ff5f00e1f6b35b1549ad7556ef8d  ./VALIDATION.md
 79cb8aba943ef1aeb8d8502fca44ea5da763cf4035b7146715e7d34b364678a4  ./VOICE-CAPTURE-EXAMPLES.md
-1fa9ded02f29ff28e0a14e98f548eecbc09c64d0c246de698115ccfc7ed36350  ./app/build.gradle
+b5b9356b995804c917e910dffb7e3fb971f179ae3fcda20c4ddde27d3e27788f  ./app/build.gradle
 f75b04455b758b3b3a90fed280d25d599c4ae1abf891b88f50b71f6700d69f9d  ./app/proguard-rules.pro
 cdfb172dc96c2f9459d00039320a62c443755a2d5fc511dcfafae85ddc49fd0a  ./app/src/main/AndroidManifest.xml
-fd1d64894a9476e6c8f4b7c5d2d970bc0c17d76e1698ff06e52bf2d35742f599  ./app/src/main/assets/web/app.js
+8e5eeb9b6187ae6d25b3d8778316a99bd2b2507854d244c08af6acbaf6cbff9c  ./app/src/main/assets/web/app.js
 8fa7f4dc3ed8847c04a4e5469d7a146d12e5f2e6a95c825bebee8493033ecdfc  ./app/src/main/assets/web/icons/icon-192.png
 8f2500c93119a698d23be1ad904a6c341bedff962c1790c780c3e158d5b478da  ./app/src/main/assets/web/icons/icon-512.png
 8fddf1b87e0065b268c2278cca5dd94d1b2d853ed1298703b36c89655d8844ed  ./app/src/main/assets/web/index.html
@@ -22,7 +23,7 @@ e78a1129e653bb4d1c7218335cf92ab8741e64cefaf3bfac153fc52b56a6e5e8  ./app/src/main
 315b9272b8e0288005de38b2f602d861b03c6680157f143b13045c9370be895f  ./app/src/main/assets/web/seed/Kunjan compilation july26.xlsx
 465f72bdd9388f48d6e11903307feed6ebb0c76e9c5b11723ca500adedcb58e5  ./app/src/main/assets/web/seed/Lost Prescrber rapid action & Follow up.xlsx
 4d96b761ef8da3af1b84b89e3c75cc10da3d21d581ef1662a3d26b8a8e3a86d0  ./app/src/main/assets/web/seed/MY Z & NICU Covering July.26.xlsx
-e210ff825304863d3dae3ddfe6c8b10cfd366cea41bd9d4ecc4bf95fbb7466a5  ./app/src/main/assets/web/styles.css
+55a835788c18429b85c325197f6a123a0f0269a24b1805529a2c5398ffd0624b  ./app/src/main/assets/web/styles.css
 d5eba0fee5584e8ab23895cfdad4972fc7090d305aac90aadc8dcd798b4c4279  ./app/src/main/java/com/mrfieldbook/app/MainActivity.java
 b417093724dd3b5c70f5cdbba2dfaaf398d3eb268c3362f350cbc2271a6bf7f5  ./app/src/main/java/com/mrfieldbook/app/ReportPackExporter.java
 efbf6f2e3eefd868cccc070bfa036a46f9f7807dbfa640ba96cc0791e1a23631  ./app/src/main/java/com/mrfieldbook/app/SanOverlayService.java

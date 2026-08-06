@@ -1,4 +1,4 @@
-# MR Machine Intelligence v14.4
+# MR Machine Intelligence v14.5
 
 Android MR field app using the existing mobile UI, with a local intelligence layer for daily patch preparation, doctor follow-up, not-met rescheduling, hospital verification, POB and company reports.
 
@@ -80,7 +80,7 @@ The APK builds on GitHub Actions. Optional live Google nearby-hospital results r
 
 Build artifact:
 
-`MR-Machine-Intelligence-v14.4-APK`
+`MR-Machine-Intelligence-v14.5-APK`
 
 
 ## v14.3 Planning correction
@@ -103,3 +103,11 @@ Build artifact:
 - Premium sheet/page transitions and native haptic feedback are included.
 
 Protected apps may choose to block overlays. In that case, copy in SAN, return to MR, and use **Paste current clipboard directly in app**.
+
+
+## v14.5 SAN bulk doctor-master import
+- Detects the copied `Listed Doctor Details` SAN format instead of treating it as one meeting.
+- Imports doctor, qualification, hospital/address, speciality, category/class, town and focus brands.
+- Merges duplicate doctor + hospital + town rows and preserves existing meetings, chemist links and verified GPS.
+- Flags missing hospitals, addresses, malformed mobile numbers and emails for review.
+- Chemist mapping, meeting timings and GPS remain pending because the SAN doctor list does not contain those fields.
