@@ -1,4 +1,4 @@
-package com.mrfieldbook.app;
+package com.mrone.fieldapp;
 
 import android.app.Notification;
 import android.app.NotificationChannel;

@@ -1,4 +1,4 @@
-package com.mrfieldbook.app;
+package com.mrone.fieldapp;
 
 import android.content.Context;
 import android.util.Base64;

@@ -1,31 +1,18 @@
-# Validation — MR Machine Intelligence v14.4
+# MR One v1.0 Validation
 
-## Passed in this delivery
+## Passed source checks
+- `node --check` passed for `app.js` and `seed-data.js`.
+- Android manifest and resources XML parse passed.
+- Web manifest JSON parse passed.
+- GitHub Actions YAML parse passed.
+- Android package wiring is consistently `com.mrone.fieldapp`.
+- Quick Doctor Details action/function wiring passed.
+- One-time automatic GPS wiring passed for Quick Doctor Details and Smart Monthly Plan.
+- Google Places nearby hospital auto-search wiring passed for Quick Doctor Details when an API key is configured.
+- Monthly visit policy and monthly eligibility functions are present and wired into planning/intelligence.
+- Smart monthly route function is present and timing-aware.
+- Uploaded v14.5 backup shape validated: 213 doctors, 228 chemists/stockists, 15 visits. Legacy doctors receive a safe default monthly target of 2 until changed.
+- Nearest-chain deterministic test passed: with equal timing windows and Doctor 1 near Doctor 3 while Doctor 2 is far, route order is 1 → 3 → 2.
 
-- `app.js` passes `node --check`.
-- Android manifest and web manifest parse as XML/JSON.
-- `android.useAndroidX=true` remains enabled.
-- Gradle `plugins {}` block remains first in `app/build.gradle`.
-- App version is `14.4.0` / versionCode `144`.
-- Android manifest declares the visible overlay permission and Android 14 special-use foreground-service type.
-- SAN overlay service includes a draggable MR bubble, editable paste box, clipboard-on-tap action, send-to-app action and stop action.
-- SAN copied text is reviewed and parsed before it can pre-fill Log Meeting.
-- Meeting chemist selection is searchable by name, area and address.
-- Doctor route ordering is strict nearest-chain from each previous stop; timing conflict is a warning only.
-- Premium transitions and native haptic bridge are included.
-- Accepted/placed orders with pending fulfilment remain included in distributor planning.
-- Doctors sharing the same hospital/place/map coordinate remain grouped into one route stop.
-
-## Still requires GitHub/phone verification
-
-- Android APK compilation and dependency resolution on GitHub Actions.
-- First-time “Display over other apps” permission flow on the user’s phone.
-- Overlay behavior over the installed SAN app; protected screens may block overlays.
-- Clipboard paste behavior on the user’s Android/OxygenOS build.
-- Haptic strength and premium transition feel on the user’s phone.
-- Google Maps route opening with real verified coordinates.
-- Live Google Places results when `PLACES_API_KEY` is configured.
-
-## Routing rule
-
-The selected start doctor/hospital is the origin. The next stop is the geographically nearest remaining verified hospital. After reaching that stop, the next selection is recalculated from that stop, continuing until all eligible stops are ordered. Timing conflicts are displayed but do not cause the route to jump over a nearer location. Google Maps calculates the final road route; in-app distance remains an approximate straight-line estimate.
+## Android compile status
+A local Gradle compile was attempted but the sandbox cannot resolve `services.gradle.org`, so Gradle 8.13 could not download. This is an environment/network limitation, not a successful APK compile. GitHub Actions must be used for the final Android compiler verification.

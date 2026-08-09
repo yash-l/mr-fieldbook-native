@@ -1,4 +1,4 @@
-package com.mrfieldbook.app;
+package com.mrone.fieldapp;
 
 import android.Manifest;
 import android.app.Activity;

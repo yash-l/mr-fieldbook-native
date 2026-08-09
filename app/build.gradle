@@ -5,15 +5,15 @@ plugins {
 def placesApiKey = project.findProperty('PLACES_API_KEY') ?: System.getenv('PLACES_API_KEY') ?: 'NO_KEY'
 
 android {
-    namespace 'com.mrfieldbook.app'
+    namespace 'com.mrone.fieldapp'
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.mrfieldbook.app'
+        applicationId 'com.mrone.fieldapp'
         minSdk 28
         targetSdk 34
-        versionCode 202
-        versionName '20.2.0'
+        versionCode 100
+        versionName '1.0.0'
         manifestPlaceholders = [PLACES_API_KEY: placesApiKey]
     }
 

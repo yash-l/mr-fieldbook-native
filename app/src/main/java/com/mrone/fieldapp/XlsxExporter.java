@@ -1,4 +1,4 @@
-package com.mrfieldbook.app;
+package com.mrone.fieldapp;
 
 import org.json.JSONArray;
 import org.json.JSONObject;

@@ -9,13 +9,13 @@
   <link rel="icon" href="icons/icon-192.png" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="stylesheet" href="styles.css" />
-  <title>MR FieldBook Practical</title>
+  <title>MR One</title>
 </head>
 <body>
   <div id="lockScreen" class="lock-screen hidden" aria-hidden="true">
     <div class="lock-card">
       <div class="brand-mark large">MR</div>
-      <h1>MR FieldBook Practical</h1>
+      <h1>MR One</h1>
       <p>Enter your local app PIN</p>
       <input id="unlockPin" class="pin-input" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="••••" />
       <button id="unlockBtn" class="btn primary full">Unlock</button>
@@ -53,7 +53,8 @@
           <button data-action="manage-samples"><span>S</span><strong>Samples</strong><small>Stock + doctor issue</small></button>
           <button data-action="manage-expenses"><span>₹</span><strong>Expenses</strong><small>TA/DA + field claims</small></button>
           <button data-action="manage-tour-plan"><span>TP</span><strong>Tour Plan</strong><small>Area + work type</small></button>
-          <button data-action="area-time-plan"><span>AT</span><strong>Area & Time Plan</strong><small>Doctors by area + timing</small></button>
+          <button data-action="quick-complete-doctor"><span>QD</span><strong>Quick Doctor Details</strong><small>Search + timing + auto GPS</small></button>
+          <button data-action="area-time-plan"><span>AT</span><strong>Smart Monthly Plan</strong><small>Due doctors + timing + route</small></button>
         </div>
 
         <div class="practical-summary-strip">
@@ -142,7 +143,8 @@
           <button class="settings-card action-card practical" data-action="manage-expenses"><span>₹</span><div><h3>Expenses</h3><p id="expenseToolText">TA / DA / stay / toll / other</p></div></button>
           <button class="settings-card action-card practical" data-action="manage-samples"><span>S</span><div><h3>Samples</h3><p id="sampleToolText">Stock and doctor distribution</p></div></button>
           <button class="settings-card action-card practical" data-action="manage-tour-plan"><span>TP</span><div><h3>Tour Program</h3><p id="tourPlanToolText">Today plan not set</p></div></button>
-          <button class="settings-card action-card practical" data-action="area-time-plan"><span>AT</span><div><h3>Area & Time Doctor Plan</h3><p>Pick area + date + time window</p></div></button>
+          <button class="settings-card action-card practical" data-action="quick-complete-doctor"><span>QD</span><div><h3>Quick Doctor Details</h3><p>Fast search, frequency, timing and automatic nearby GPS</p></div></button>
+          <button class="settings-card action-card practical" data-action="area-time-plan"><span>AT</span><div><h3>Smart Monthly Doctor Plan</h3><p>Area + time + visit frequency + nearest route</p></div></button>
           <button class="settings-card action-card practical" data-action="manage-rcpa"><span>R</span><div><h3>RCPA / Competition</h3><p id="rcpaToolText">Chemist prescription audit</p></div></button>
           <button class="settings-card action-card practical" data-action="manage-sales"><span>↗</span><div><h3>Target & Sales</h3><p id="salesToolText">Monthly target vs achievement</p></div></button>
           <button class="settings-card action-card" id="manageDistributorsBtn"><span>DS</span><div><h3>Distributor setup</h3><p id="distributorCountText">0 distributors</p></div></button>
