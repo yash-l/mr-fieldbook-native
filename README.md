@@ -1,60 +1,64 @@
-# MR Machine Intelligence v14.5
+# MR FieldFlow v19
 
-Android MR field app using the existing mobile UI, with a local intelligence layer for daily patch preparation, doctor follow-up, not-met rescheduling, hospital verification, POB and company reports.
+Offline Android field-work app for medical representatives. v19 keeps the v18 self-learning doctor intelligence, GPS verification, POB, route planning, imports and company reports, but redesigns daily work around one simple flow.
 
-## Main workflow
+## Daily MR flow
 
-1. Import or add doctors, hospitals/clinics, linked chemists and products.
-2. Save doctor meeting days and up to two timing windows. Quick presets: **Mon–Sat**, **Every day**, **Morning 10–12**, **Evening 5–8**, and **Both**.
-3. Open **MR Machine**. It reads saved timing, follow-up dates, visit history, not-met history, product feedback and data completeness.
-4. Review and confirm the suggested daily patch.
-5. Open a doctor call and select the result:
-   - Doctor met
-   - Doctor not met
-   - Doctor on leave
-   - Doctor in OT
-   - Hospital closed
-   - Timing changed
-6. When the doctor is not met, the app calculates the next available saved meeting slot and suggests a replacement doctor for the current day.
-7. Save product feedback, chemist availability, POB/distributor order and notes.
-8. Generate the daily report, full XLSX, or the four-file company report ZIP.
+1. Open **Today**.
+2. Tap **Doctor visit** for the normal call flow.
+3. Search the doctor. Saved hospital, chemist and timing are reused automatically.
+4. Record the meeting result. If the doctor is not met, the intelligence engine proposes the next saved slot and a same-day replacement.
+5. Update only product feedback that changed. POB and extra report metrics stay optional.
+6. Use **Chemist visit** for retailer/chemist availability and follow-up without forcing a doctor call.
+7. Use **POB order** for chemist → distributor → product ordering.
+8. Use **Nearby** or **Route** only when location planning is needed.
+9. Log **Field expense** for travel, food, stay, toll/parking or other claim items.
+10. Use **Close day** to review calls, doctor logs, chemist visits, POB, expenses and due follow-ups, then copy/share the daily report.
 
-## Intelligence included
+## v19 usability changes
 
-- Timing-aware daily smart patch
+- New **Today** control centre with one primary Doctor Visit action.
+- Central bottom-nav **Visit** button.
+- Doctor master details are collapsed during a call; open them only when hospital, chemist or timing changed.
+- GPS verification is collapsed and never starts automatically.
+- Chemist-only visit flow added.
+- Expense log and day-close summary added.
+- POB, nearby hospitals, route, voice capture and doctor master remain one tap away.
+- Reports and setup are lower-priority disclosures instead of dominating the home screen.
+
+## Stability / data-safety changes
+
+- Existing v18 local data uses the same storage key and is migrated to v19.
+- Every successful save records `lastSavedAt`.
+- Before replacing the main local state, the previous valid JSON is retained as a last-good recovery copy.
+- If the primary state becomes unreadable, the app attempts last-good recovery.
+- Doctor visit and POB forms now guard against double-submit duplicate records.
+- Android Back closes an open sheet first, then returns to Today, then exits.
+- Voice and active GPS listeners are stopped on pause/destroy.
+- WebView is destroyed cleanly when the activity closes.
+- Cleartext traffic is disabled.
+- Fresh installs no longer contain fake daily call/opening figures.
+- Fresh installs do not start GPS on app launch.
+
+## Intelligence preserved
+
+- Timing-aware smart patch / next-best-call queue
 - Follow-up and overdue priority
-- Not-met history priority
+- Not-met history
+- Self-learning doctor meeting pattern from local visit outcomes
 - Automatic next-meeting calculation
 - Same-day replacement doctor suggestion
-- Product opportunity signal: feedback pending, regular, declining or lost prescriber
-- Doctor master completion score
-- Missing hospital, chemist, timing and GPS verification counters
-- Possible duplicate doctor detection
-- Confirmed patch history for reporting
-- Reschedule history and machine action audit
+- Product opportunity / lost-prescriber signals
+- Doctor data-completion quality checks
+- Duplicate-doctor detection
+- 2 successful visits/month maximum and 15-day minimum successful-call gap
+- Patch, reschedule and intelligence audit history
 
-The score is explainable. Each suggested call shows its reasons. It does not submit or change company systems automatically.
+The intelligence is local adaptive scoring, not an LLM or cloud AI.
 
 ## GPS behaviour
 
-GPS is not used for attendance, continuous tracking or smart-patch scoring.
-
-- Meeting form does not start GPS automatically.
-- GPS runs only after **Verify hospital GPS** is tapped.
-- Captured coordinates can be saved as the doctor/hospital verified location.
-- Nearby hospital discovery uses GPS only to find and fill hospital data.
-- Route planning uses only previously verified doctor/hospital coordinates and a saved doctor/hospital as the starting point; it does not fetch current GPS.
-
-## Company report pack
-
-Tools → **Generate 4 company files** creates one ZIP containing four separate XLSX files:
-
-1. `Lost Prescrber rapid action & Follow up.xlsx`
-2. `MY Z & NICU Covering July.26.xlsx`
-3. `Kunjan compilation july26.xlsx`
-4. `GUJ_SALES.xlsx`
-
-The reports use actual app data. Official target, primary, secondary and closing-sales values are left blank until official sales data is imported; the app does not invent figures. Each workbook includes a **Data Missing** sheet.
+GPS is not attendance tracking and is not continuous. v19 fetches GPS only after an explicit location action such as hospital verification, Nearby or route planning. Saved coordinates can be used later for routing.
 
 ## Full XLSX sheets
 
@@ -63,6 +67,7 @@ The reports use actual app data. Official target, primary, secondary and closing
 - Chemists
 - Distributors
 - Orders
+- Expenses
 - Visits
 - Location Audit
 - Schemes
@@ -74,40 +79,24 @@ The reports use actual app data. Official target, primary, secondary and closing
 - Products
 - Voice Captures
 
+## Company report pack
+
+Tools → **Generate 4 company files** creates:
+
+1. `Lost Prescrber rapid action & Follow up.xlsx`
+2. `MY Z & NICU Covering July.26.xlsx`
+3. `Kunjan compilation july26.xlsx`
+4. `GUJ_SALES.xlsx`
+
+Official primary/secondary/closing sales are never fabricated; missing official values stay blank and are listed in Data Missing.
+
 ## Android build
 
-The APK builds on GitHub Actions. Optional live Google nearby-hospital results require a repository secret named `PLACES_API_KEY`. Without the key, the app and saved-hospital workflow still work.
+- `versionCode 190`
+- `versionName 19.0.0`
+- Java 17
+- minSdk 28
+- targetSdk 34
+- compileSdk 35
 
-Build artifact:
-
-`MR-Machine-Intelligence-v14.5-APK`
-
-
-## v14.3 Planning correction
-- Accepted POB orders automatically create a pending distributor stop.
-- Distributor stop remains visible until the order is marked fulfilled.
-- Doctors sharing the same hospital/map pin are grouped into one location stop.
-- Distributor location uses a manually verified Maps pin; device GPS remains doctor/hospital-only.
-- Google Maps calculates the actual road route; in-app kilometre values are approximate straight-line estimates.
-
-
-## v14.4 SAN copy overlay + premium field flow
-
-- Tools → **SAN copy overlay** requests the Android “Display over other apps” permission once.
-- A draggable **MR** bubble stays visible over SAN while the user chooses what to copy.
-- The bubble expands into a paste/review box. It reads the clipboard only after the user taps **Paste clipboard**.
-- **Send to MR** opens a review screen where doctor, hospital, chemist, distributor, timings, products and POB are detected before anything is saved.
-- **Use these details in Log Meeting** pre-fills the normal meeting screen; final save remains user-confirmed.
-- The meeting chemist field is now searchable by chemist name, area and address instead of a long dropdown.
-- Route ordering uses strict nearest-chain logic: selected start → nearest stop → nearest from that stop. Timing conflicts are warnings and no longer reorder a nearer stop.
-- Premium sheet/page transitions and native haptic feedback are included.
-
-Protected apps may choose to block overlays. In that case, copy in SAN, return to MR, and use **Paste current clipboard directly in app**.
-
-
-## v14.5 SAN bulk doctor-master import
-- Detects the copied `Listed Doctor Details` SAN format instead of treating it as one meeting.
-- Imports doctor, qualification, hospital/address, speciality, category/class, town and focus brands.
-- Merges duplicate doctor + hospital + town rows and preserves existing meetings, chemist links and verified GPS.
-- Flags missing hospitals, addresses, malformed mobile numbers and emails for review.
-- Chemist mapping, meeting timings and GPS remain pending because the SAN doctor list does not contain those fields.
+GitHub Actions artifact: `MR-FieldFlow-v19-APK`.

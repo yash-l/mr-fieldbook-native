@@ -2,7 +2,8 @@
   'use strict';
 
   const STORE_KEY = 'mr-daily-auto-v3';
-  const APP_VERSION = 14.5;
+  const STORE_BACKUP_KEY = 'mr-daily-auto-v3-last-good';
+  const APP_VERSION = 19.0;
   const METRICS = [
     ['calls', 'Calls'],
     ['inputs', 'Input Distributed'],
@@ -11,12 +12,6 @@
     ['conversation', 'Conversations'],
     ['newAvailability', 'New Chemist Availability'],
     ['pobValue', 'POB Value']
-  ];
-  const BUNDLED_FILES = [
-    'seed/MY Z & NICU Covering July.26.xlsx',
-    'seed/Lost Prescrber rapid action & Follow up.xlsx',
-    'seed/Kunjan compilation july26.xlsx',
-    'seed/GUJ_SALES.xls'
   ];
 
   const $ = (s, root = document) => root.querySelector(s);
@@ -95,11 +90,43 @@
   const statusClass = s => s === 'prescribed' ? 'good' : s === 'not_prescribed' ? 'bad' : '';
   const OUTCOME_LABELS={met:'Doctor met',not_met:'Doctor not met',leave:'Doctor on leave',ot:'Doctor in OT',closed:'Hospital closed',timing_changed:'Timing changed'};
   const NOT_MET_OUTCOMES=new Set(['not_met','leave','ot','closed','timing_changed']);
+  let plannerLocation={lat:0,lng:0,accuracy:0,capturedAt:'',source:''};
+  const plannerLocationFresh=()=>plannerLocation.lat&&plannerLocation.lng&&plannerLocation.capturedAt&&(Date.now()-new Date(plannerLocation.capturedAt).getTime())<10*60*1000;
+  const mapConfidence=d=>{const a=num(d?.locationAccuracy);if(!num(d?.latitude)||!num(d?.longitude))return 'missing';if(a&&a>150)return 'review';return (d?.locationSource||'').toLowerCase().includes('verified')||a&&a<=50?'verified':'saved';};
   const dateOnly=v=>clean(v).slice(0,10);
   function daysBetween(a,b){const x=new Date(`${dateOnly(a)}T00:00:00`),y=new Date(`${dateOnly(b)}T00:00:00`);return Number.isNaN(x.getTime())||Number.isNaN(y.getTime())?0:Math.round((y-x)/86400000);}
   function doctorVisitRows(doctorId){return state.visits.filter(v=>v.doctorId===doctorId).sort((a,b)=>String(a.date).localeCompare(String(b.date)));}
   function latestDoctorVisit(doctorId,metOnly=false){return doctorVisitRows(doctorId).filter(v=>!metOnly||!NOT_MET_OUTCOMES.has(v.outcome)).slice(-1)[0]||null;}
   function recentNotMetCount(doctorId,windowDays=60){const cutoff=new Date();cutoff.setDate(cutoff.getDate()-windowDays);return doctorVisitRows(doctorId).filter(v=>NOT_MET_OUTCOMES.has(v.outcome)&&new Date(v.date)>=cutoff).length;}
+  function successfulDoctorVisits(doctorId){return doctorVisitRows(doctorId).filter(v=>!NOT_MET_OUTCOMES.has(v.outcome));}
+  function successfulVisitsThisMonth(doctorId,date=localISODate()){const mk=monthKey(date);return successfulDoctorVisits(doctorId).filter(v=>monthKey(v.date)===mk).length;}
+  function doctorEligibility(doctor,at=now()){
+    const date=localISODate(at),monthVisits=successfulVisitsThisMonth(doctor.id,date),last=latestDoctorVisit(doctor.id,true);
+    if(monthVisits>=2)return {eligible:false,reason:'2/2 visits completed this month',monthVisits,nextEligible:''};
+    if(last){const gap=daysBetween(last.date,date);if(gap<15){const next=new Date(`${dateOnly(last.date)}T00:00:00`);next.setDate(next.getDate()+15);return {eligible:false,reason:`15-day lock • next ${prettyDate(localISODate(next))}`,monthVisits,nextEligible:localISODate(next)};}}
+    return {eligible:true,reason:`Visit ${monthVisits+1}/2 due`,monthVisits,nextEligible:date};
+  }
+  function learnedDoctorPattern(doctor,at=now()){
+    const rows=doctorVisitRows(doctor.id).filter(v=>v.date);
+    if(!rows.length)return {confidence:'low',score:0,bestDays:[],bestHours:[],metRate:0,samples:0,weekdayRate:0,timeRate:0,trend:0};
+    const valid=rows.map(v=>({v,d:new Date(v.date),met:!NOT_MET_OUTCOMES.has(v.outcome)})).filter(x=>!Number.isNaN(x.d.getTime()));
+    if(!valid.length)return {confidence:'low',score:0,bestDays:[],bestHours:[],metRate:0,samples:0,weekdayRate:0,timeRate:0,trend:0};
+    const weightedRate=list=>{let yes=0,total=0;list.forEach((x,i)=>{const age=Math.max(0,(at-x.d)/86400000),w=Math.max(.35,Math.exp(-age/90));total+=w;if(x.met)yes+=w;});return total?yes/total:.5;};
+    const metRate=weightedRate(valid), dayRows=valid.filter(x=>x.d.getDay()===at.getDay()), hour=at.getHours(),timeRows=valid.filter(x=>Math.abs(x.d.getHours()-hour)<=1);
+    const weekdayRate=dayRows.length?weightedRate(dayRows):metRate, timeRate=timeRows.length?weightedRate(timeRows):metRate;
+    const byDay=[0,1,2,3,4,5,6].map(day=>({day,rows:valid.filter(x=>x.d.getDay()===day)})).filter(x=>x.rows.length).map(x=>({day:x.day,rate:weightedRate(x.rows),n:x.rows.length})).sort((a,b)=>b.rate-a.rate||b.n-a.n);
+    const byHour=[...new Set(valid.map(x=>x.d.getHours()))].map(h=>({h,rows:valid.filter(x=>x.d.getHours()===h)})).map(x=>({h:x.h,rate:weightedRate(x.rows),n:x.rows.length})).sort((a,b)=>b.rate-a.rate||b.n-a.n);
+    const recent=valid.slice(-5), older=valid.slice(Math.max(0,valid.length-10),Math.max(0,valid.length-5)),trend=weightedRate(recent)-(older.length?weightedRate(older):metRate);
+    const samples=valid.length,confidence=samples>=10?'high':samples>=4?'medium':'low';
+    // Bayesian-style conservative score: history helps, but never overrules visit eligibility.
+    const strength=Math.min(1,samples/8),score=((metRate-.5)*28+(weekdayRate-.5)*22+(timeRate-.5)*18+trend*12)*strength;
+    return {confidence,score,bestDays:byDay.slice(0,3).map(x=>x.day),bestHours:byHour.slice(0,3).map(x=>x.h),metRate,samples,weekdayRate,timeRate,trend};
+  }
+  function latestPlanningAnchor(){
+    if(plannerLocationFresh())return {lat:plannerLocation.lat,lng:plannerLocation.lng,accuracy:plannerLocation.accuracy,source:'current phone GPS'};
+    const todayRows=rowsForDay().filter(v=>num(v.latitude)&&num(v.longitude)).sort((a,b)=>String(b.date).localeCompare(String(a.date)));if(todayRows[0])return {lat:num(todayRows[0].latitude),lng:num(todayRows[0].longitude),accuracy:num(todayRows[0].locationAccuracy),source:'last visit GPS'};
+    const rows=[...state.visits].filter(v=>num(v.latitude)&&num(v.longitude)).sort((a,b)=>String(b.date).localeCompare(String(a.date)));if(rows[0])return {lat:num(rows[0].latitude),lng:num(rows[0].longitude),accuracy:num(rows[0].locationAccuracy),source:'last saved visit GPS'};return null;
+  }
   function doctorCompleteness(doctor){
     const checks=[['Hospital',doctorHospital(doctor)],['Chemist',linkedChemist(doctor)],['Meeting days',normalizeMeetingDays(doctor?.meetingDays).length],['Meeting timing',doctorMeetingSlots(doctor).length],['Hospital GPS',num(doctor?.latitude)&&num(doctor?.longitude)]];
     const missing=checks.filter(([,ok])=>!ok).map(([name])=>name),score=Math.round(((checks.length-missing.length)/checks.length)*100);
@@ -126,26 +153,45 @@
   }
   function intelligenceScore(doctor){
     if(rowsForDay().some(v=>v.doctorId===doctor.id))return -10000;
-    const timing=doctorMeetingStatus(doctor),complete=doctorCompleteness(doctor),last=latestDoctorVisit(doctor.id,true),days=last?daysBetween(last.date,localISODate()):999,notMet=recentNotMetCount(doctor.id),due=doctor.nextFollowUp&&doctor.nextFollowUp<=localISODate(),rescheduled=state.reschedules.some(r=>r.doctorId===doctor.id&&r.status==='pending'&&r.scheduledDate<=localISODate());
-    let score=0;if(timing.state==='available')score+=100;else if(timing.state==='upcoming')score+=65;else if(timing.state==='scheduled')score+=30;else score-=35;
-    if(due)score+=75;if(rescheduled)score+=85;score+=Math.min(55,Math.max(0,days));score+=Math.min(30,notMet*8);score+=complete.score/10;
+    const eligibility=doctorEligibility(doctor);if(!eligibility.eligible)return -10000;
+    const timing=doctorMeetingStatus(doctor),complete=doctorCompleteness(doctor),last=latestDoctorVisit(doctor.id,true),days=last?daysBetween(last.date,localISODate()):999,notMet=recentNotMetCount(doctor.id),due=doctor.nextFollowUp&&doctor.nextFollowUp<=localISODate(),rescheduled=state.reschedules.some(r=>r.doctorId===doctor.id&&r.status==='pending'&&r.scheduledDate<=localISODate()),learned=learnedDoctorPattern(doctor);
+    let score=0;if(timing.state==='available')score+=110;else if(timing.state==='upcoming')score+=70;else if(timing.state==='scheduled')score+=25;else score-=45;
+    if(due)score+=75;if(rescheduled)score+=90;score+=Math.min(60,Math.max(0,days));score-=Math.min(18,notMet*3);score+=complete.score/10;score+=learned.score;
     const opportunity=productOpportunity(doctor);if(opportunity.level==='high')score+=45;else if(opportunity.level==='medium')score+=22;
+    const anchor=latestPlanningAnchor();if(anchor&&num(doctor.latitude)&&num(doctor.longitude)){const km=haversineKm(anchor.lat,anchor.lng,doctor.latitude,doctor.longitude);score+=Math.max(0,35-km*5);}
     return score;
   }
   function intelligenceReasons(doctor){
-    const reasons=[],timing=doctorMeetingStatus(doctor),quality=doctorCompleteness(doctor),opportunity=productOpportunity(doctor),last=latestDoctorVisit(doctor.id,true),notMet=recentNotMetCount(doctor.id);
+    const reasons=[],timing=doctorMeetingStatus(doctor),quality=doctorCompleteness(doctor),opportunity=productOpportunity(doctor),last=latestDoctorVisit(doctor.id,true),notMet=recentNotMetCount(doctor.id),eligibility=doctorEligibility(doctor),learned=learnedDoctorPattern(doctor);
+    reasons.push(eligibility.reason);
     if(timing.state==='available')reasons.push('available now');else if(timing.state==='upcoming')reasons.push(timing.label.toLowerCase());else if(timing.state==='unset')reasons.push('meeting timing missing');
     if(doctor.nextFollowUp&&doctor.nextFollowUp<=localISODate())reasons.push('follow-up due');
-    if(last){const gap=daysBetween(last.date,localISODate());if(gap>=14)reasons.push(`${gap} days since met`);}else reasons.push('no confirmed meeting history');
-    if(notMet)reasons.push(`${notMet} recent not-met`);
-    if(opportunity.level!=='normal')reasons.push(opportunity.label);
-    if(quality.missing.length)reasons.push(`missing ${quality.missing.slice(0,2).join(' + ')}`);
-    return reasons.slice(0,4);
+    if(last){const gap=daysBetween(last.date,localISODate());if(gap>=15)reasons.push(`${gap} days since met`);}else reasons.push('no confirmed meeting history');
+    if(notMet)reasons.push(`${notMet} recent not-met`);if(learned.samples)reasons.push(`learned ${Math.round(learned.metRate*100)}% meet rate (${learned.confidence})`);
+    if(opportunity.level!=='normal')reasons.push(opportunity.label);if(quality.missing.length)reasons.push(`missing ${quality.missing.slice(0,2).join(' + ')}`);
+    return reasons.slice(0,5);
   }
   function smartPatchCandidates(limit=10){
     return state.doctors.map(doctor=>({doctor,score:intelligenceScore(doctor),timing:doctorMeetingStatus(doctor),quality:doctorCompleteness(doctor),opportunity:productOpportunity(doctor),reasons:intelligenceReasons(doctor)})).filter(x=>x.score>-9000).sort((a,b)=>b.score-a.score||doctorDisplayName(a.doctor).localeCompare(doctorDisplayName(b.doctor))).slice(0,limit);
   }
-  function replacementDoctor(excludeId){return smartPatchCandidates(20).find(x=>x.doctor.id!==excludeId&&['available','upcoming'].includes(x.timing.state))||smartPatchCandidates(20).find(x=>x.doctor.id!==excludeId)||null;}
+  function replacementDoctor(excludeId){
+    const anchor=latestPlanningAnchor(), candidates=smartPatchCandidates(80).filter(x=>x.doctor.id!==excludeId&&doctorEligibility(x.doctor).eligible&&!rowsForDay().some(v=>v.doctorId===x.doctor.id));
+    const usable=candidates.filter(x=>num(x.doctor.latitude)&&num(x.doctor.longitude)&&['available','upcoming'].includes(x.timing.state));
+    if(anchor&&usable.length){
+      usable.sort((a,b)=>{const aNow=a.timing.state==='available'?0:1,bNow=b.timing.state==='available'?0:1;if(aNow!==bNow)return aNow-bNow;const ad=haversineKm(anchor.lat,anchor.lng,a.doctor.latitude,a.doctor.longitude),bd=haversineKm(anchor.lat,anchor.lng,b.doctor.latitude,b.doctor.longitude);return ad-bd||b.score-a.score;});
+      return usable[0];
+    }
+    return usable[0]||candidates.find(x=>['available','upcoming'].includes(x.timing.state))||candidates[0]||null;
+  }
+  function addDynamicReplacementToTodayPatch(missedDoctor,replacement){
+    if(!replacement?.doctor)return;
+    let patch=[...state.patchPlans].reverse().find(p=>p.date===localISODate()&&['confirmed','dynamic'].includes(p.status));
+    if(!patch){patch={id:uid('patch'),date:localISODate(),createdAt:new Date().toISOString(),status:'dynamic',items:[]};state.patchPlans.push(patch);}
+    patch.items=Array.isArray(patch.items)?patch.items:[];
+    patch.items=patch.items.filter(x=>x.doctorId!==missedDoctor.id);
+    if(!patch.items.some(x=>x.doctorId===replacement.doctor.id))patch.items.push({order:patch.items.length+1,type:'Replacement',doctorId:replacement.doctor.id,doctorName:replacement.doctor.name,hospital:doctorHospital(replacement.doctor),timing:replacement.timing.label,score:Math.round(replacement.score),reason:`Auto replacement for ${missedDoctor.name} • nearest eligible ${replacement.timing.state==='available'?'available now':'today'}`,productAction:replacement.opportunity.label});
+    patch.items.forEach((x,i)=>x.order=i+1);patch.updatedAt=new Date().toISOString();
+  }
   function dataQualitySummary(){
     const missingHospital=state.doctors.filter(d=>!doctorHospital(d)).length,missingChemist=state.doctors.filter(d=>!linkedChemist(d)).length,missingTiming=state.doctors.filter(d=>!normalizeMeetingDays(d.meetingDays).length||!doctorMeetingSlots(d).length).length,missingGps=state.doctors.filter(d=>!num(d.latitude)||!num(d.longitude)).length;
     const keyCounts=new Map();state.doctors.forEach(d=>{const key=`${norm(d.name)}|${norm(doctorHospital(d))}`;if(norm(d.name))keyCounts.set(key,(keyCounts.get(key)||0)+1);});
@@ -159,7 +205,7 @@
   }
   function openIntelligenceCenter(){
     const patch=smartPatchCandidates(12),q=dataQualitySummary(),pending=state.reschedules.filter(r=>r.status==='pending').sort((a,b)=>String(a.scheduledDate).localeCompare(String(b.scheduledDate))),distributorStops=pendingDistributorStops();
-    openSheet('MR Machine','Reads saved field data and prepares the next best actions. GPS is not used for attendance or scoring.',`<div class="machine-summary-grid"><div><strong>${patch.length}</strong><small>Doctor calls</small></div><div><strong>${distributorStops.length}</strong><small>Distributor stops</small></div><div><strong>${q.complete}/${q.total}</strong><small>Verified data</small></div></div><div class="detail-section"><h4>Today smart patch</h4><div class="machine-patch-list">${patch.length?patch.map((x,i)=>`<div class="machine-patch-row"><span>${i+1}</span><div><strong>${esc(doctorDisplayName(x.doctor))}</strong><small>${esc(x.reasons.join(' • ')||x.timing.label)}</small><em>${esc(x.opportunity.label)}</em></div><button data-action="log-record" data-type="doctor" data-id="${esc(x.doctor.id)}">Meet</button></div>`).join(''):empty('No pending calls.')}</div></div><div class="detail-section"><h4>Accepted orders → distributor planning</h4>${distributorStops.length?distributorStops.map((x,i)=>`<div class="machine-reschedule"><strong>${i+1}. ${esc(x.distributor.name)} • ₹${esc(x.totalValue.toLocaleString('en-IN'))}</strong><small>${esc(`${x.orders.length} order(s) • ${x.chemists.join(', ')||'Chemist pending'} • ${x.address||'Address missing'}${x.mapReady?' • map ready':' • map pin missing'}`)}</small></div>`).join(''):empty('No accepted order is pending distributor fulfilment.')}</div><button id="confirmMachinePatchBtn" class="btn primary full">Confirm doctor + distributor plan</button><div class="detail-section"><h4>Pending reschedules</h4>${pending.length?pending.map(r=>`<div class="machine-reschedule"><strong>${esc(r.doctorName)}</strong><small>${esc(`${prettyDate(r.scheduledDate)} • ${timeLabel(r.meetingFrom)}–${timeLabel(r.meetingTo)} • ${r.reason}`)}</small></div>`).join(''):empty('No pending reschedule.')}</div><div class="detail-section"><h4>Data quality</h4><div class="quality-grid"><div><b>${q.missingHospital}</b><span>Hospital missing</span></div><div><b>${q.missingChemist}</b><span>Chemist missing</span></div><div><b>${q.missingTiming}</b><span>Timing missing</span></div><div><b>${q.missingGps}</b><span>GPS verification pending</span></div><div><b>${q.duplicates}</b><span>Possible duplicate</span></div></div></div>`);
+    openSheet('MR Machine','Learns locally from saved visit outcomes, weekday/time success, follow-ups and current foreground GPS. No background tracking or cloud AI.',`<div class="machine-summary-grid"><div><strong>${patch.length}</strong><small>Doctor calls</small></div><div><strong>${distributorStops.length}</strong><small>Distributor stops</small></div><div><strong>${q.complete}/${q.total}</strong><small>Verified data</small></div></div><div class="detail-section"><h4>Today smart patch</h4><div class="machine-patch-list">${patch.length?patch.map((x,i)=>`<div class="machine-patch-row"><span>${i+1}</span><div><strong>${esc(doctorDisplayName(x.doctor))}</strong><small>${esc(x.reasons.join(' • ')||x.timing.label)}</small><em>${esc(x.opportunity.label)}</em></div><button data-action="log-record" data-type="doctor" data-id="${esc(x.doctor.id)}">Meet</button></div>`).join(''):empty('No pending calls.')}</div></div><div class="detail-section"><h4>Accepted orders → distributor planning</h4>${distributorStops.length?distributorStops.map((x,i)=>`<div class="machine-reschedule"><strong>${i+1}. ${esc(x.distributor.name)} • ₹${esc(x.totalValue.toLocaleString('en-IN'))}</strong><small>${esc(`${x.orders.length} order(s) • ${x.chemists.join(', ')||'Chemist pending'} • ${x.address||'Address missing'}${x.mapReady?' • map ready':' • map pin missing'}`)}</small></div>`).join(''):empty('No accepted order is pending distributor fulfilment.')}</div><button id="confirmMachinePatchBtn" class="btn primary full">Confirm doctor + distributor plan</button><div class="detail-section"><h4>Pending reschedules</h4>${pending.length?pending.map(r=>`<div class="machine-reschedule"><strong>${esc(r.doctorName)}</strong><small>${esc(`${prettyDate(r.scheduledDate)} • ${timeLabel(r.meetingFrom)}–${timeLabel(r.meetingTo)} • ${r.reason}`)}</small></div>`).join(''):empty('No pending reschedule.')}</div><div class="detail-section"><h4>Data quality</h4><div class="quality-grid"><div><b>${q.missingHospital}</b><span>Hospital missing</span></div><div><b>${q.missingChemist}</b><span>Chemist missing</span></div><div><b>${q.missingTiming}</b><span>Timing missing</span></div><div><b>${q.missingGps}</b><span>GPS verification pending</span></div><div><b>${q.duplicates}</b><span>Possible duplicate</span></div></div></div>`);
     $('#confirmMachinePatchBtn')?.addEventListener('click',()=>{state.patchPlans.push({id:uid('patch'),date:localISODate(),createdAt:new Date().toISOString(),status:'confirmed',items:[...patch.map((x,i)=>({order:i+1,type:'Doctor',doctorId:x.doctor.id,doctorName:x.doctor.name,hospital:doctorHospital(x.doctor),timing:x.timing.label,score:Math.round(x.score),reason:x.reasons.join('; '),productAction:x.opportunity.label})),...distributorStops.map((x,i)=>({order:patch.length+i+1,type:'Distributor',distributorId:x.distributor.id,distributorName:x.distributor.name,hospital:'',timing:'Order fulfilment',score:'',reason:`${x.orders.length} accepted order(s); ${x.chemists.join(', ')}`,productAction:`POB ₹${x.totalValue}`}))]});saveState();toast('Doctor calls and distributor stops added to planning reports.');});
   }
 
@@ -182,8 +228,8 @@ function defaultSchemes() {
     return {
       version: APP_VERSION,
       profile: {
-        tmName: 'Olakiya Vishal',
-        hq: 'Rajkot',
+        tmName: '',
+        hq: '',
         joinWorkWith: 'IND',
         companyDivision: 'FDC Nutrica',
         products: 'MumMum 1, MumMum 2, Simyl MCT, Zefrich, Zefrich HP'
@@ -194,19 +240,16 @@ function defaultSchemes() {
       products: [],
       schemes: defaultSchemes(),
       orders: [],
+      expenses: [],
       routePlans: [],
       patchPlans: [],
       reschedules: [],
       intelligenceLog: [],
       captures: [],
-      visits: [{
-        id: uid('log'), date: `${today}T10:00`, entityType: 'general', entityId: '', entityName: 'Starting daily report',
-        calls: 12, inputs: 0, basket: 0, towel: 0, conversation: 0, newAvailability: 0, pobValue: 0,
-        notes: 'Starting value supplied for today.', productStatuses: {}, followUpDate: '', createdAt: new Date().toISOString()
-      }],
-      opening: {monthKey: monthKey(today), calls:164, inputs:0, basket:0, towel:0, conversation:0, newAvailability:0, pobValue:0},
+      visits: [],
+      opening: {monthKey: monthKey(today), ...metricBlank()},
       imports: [],
-      settings: {bundledImportAttempted:false, embeddedSeedLoaded:false, pinHash:'', installedHintSeen:false, workflowMode:'collect', nearbyRadiusMeters:1000}
+      settings: {bundledImportAttempted:false, embeddedSeedLoaded:false, pinHash:'', installedHintSeen:false, workflowMode:'field', nearbyRadiusMeters:1000, lastSavedAt:'', recoveryCount:0}
     };
   }
 
@@ -225,6 +268,7 @@ function defaultSchemes() {
       products: Array.isArray(raw?.products) ? raw.products : [],
       schemes: Array.isArray(raw?.schemes) && raw.schemes.length ? raw.schemes : fresh.schemes,
       orders: Array.isArray(raw?.orders) ? raw.orders : [],
+      expenses: Array.isArray(raw?.expenses) ? raw.expenses : [],
       routePlans: Array.isArray(raw?.routePlans) ? raw.routePlans : [],
       patchPlans: Array.isArray(raw?.patchPlans) ? raw.patchPlans : [],
       reschedules: Array.isArray(raw?.reschedules) ? raw.reschedules : [],
@@ -270,10 +314,22 @@ function defaultSchemes() {
   }
 
   function loadState() {
+    const parseStored = key => {
+      const raw = localStorage.getItem(key);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? migrateState(parsed) : null;
+    };
     try {
-      const parsed = JSON.parse(localStorage.getItem(STORE_KEY));
-      return parsed && typeof parsed === 'object' ? migrateState(parsed) : makeDefaultState();
+      return parseStored(STORE_KEY) || makeDefaultState();
     } catch (_) {
+      try {
+        const recovered = parseStored(STORE_BACKUP_KEY);
+        if (recovered) {
+          recovered.settings.recoveryCount = num(recovered.settings.recoveryCount) + 1;
+          return recovered;
+        }
+      } catch (_) {}
       return makeDefaultState();
     }
   }
@@ -288,8 +344,22 @@ function defaultSchemes() {
   const nearbyPlaceCache = new Map();
 
   function saveState(render = true) {
-    localStorage.setItem(STORE_KEY, JSON.stringify(state));
-    if (render) renderAll();
+    try {
+      if (!state.settings) state.settings = {};
+      state.settings.lastSavedAt = new Date().toISOString();
+      const next = JSON.stringify(state);
+      const previous = localStorage.getItem(STORE_KEY);
+      if (previous && previous !== next) {
+        try { JSON.parse(previous); localStorage.setItem(STORE_BACKUP_KEY, previous); } catch (_) {}
+      }
+      localStorage.setItem(STORE_KEY, next);
+      if (render) renderAll();
+      return true;
+    } catch (error) {
+      console.error('State save failed', error);
+      try { toast('Could not save locally. Export a backup before continuing.'); } catch (_) {}
+      return false;
+    }
   }
 
   function focusProducts() {
@@ -382,6 +452,8 @@ function productCatalog(){
   return [...new Set([...focusProducts(),...state.products.map(p=>clean(p.name)),...state.schemes.map(x=>clean(x.product))].filter(Boolean))].sort((a,b)=>a.localeCompare(b));
 }
 function ordersForDay(date=localISODate()){return state.orders.filter(o=>String(o.date||'').slice(0,10)===date);}
+function expensesForDay(date=localISODate()){return state.expenses.filter(x=>String(x.date||'').slice(0,10)===date);}
+function expenseTotal(date=localISODate()){return expensesForDay(date).reduce((n,x)=>n+num(x.amount),0);}
 function orderTotal(o){return (o.items||[]).reduce((n,x)=>n+num(x.value),0)||num(o.totalValue);}
 function orderNeedsDistributorVisit(o,date=localISODate()){
   const status=clean(o?.status||'placed').toLowerCase(),fulfilment=clean(o?.fulfilmentStatus||'pending').toLowerCase(),planDate=String(o?.planningDate||o?.date||date).slice(0,10);
@@ -434,41 +506,19 @@ function todaySlot(doctor,at=now()){
 }
 function routeCandidates(lat,lng,includeVisited=false){
   const visited=new Set(rowsForDay().map(v=>v.doctorId).filter(Boolean));
-  const list=state.doctors.map(d=>({doctor:d,slot:todaySlot(d)})).filter(x=>x.slot&&x.doctor.latitude&&x.doctor.longitude&&(includeVisited||!visited.has(x.doctor.id)));
+  const list=state.doctors.map(d=>({doctor:d,slot:todaySlot(d)})).filter(x=>x.slot&&num(x.doctor.latitude)&&num(x.doctor.longitude)&&doctorEligibility(x.doctor).eligible&&(includeVisited||!visited.has(x.doctor.id)));
   const remaining=[...list],route=[];let pLat=num(lat),pLng=num(lng),clock=now().getHours()*60+now().getMinutes();
   while(remaining.length){
-    const ranked=remaining.map(x=>{
-      const distance=haversineKm(pLat,pLng,x.doctor.latitude,x.doctor.longitude);
-      const travel=Math.max(4,Math.round(distance/24*60));
-      const rawArrival=clock+travel;
-      const arrival=Math.max(rawArrival,x.slot.start);
-      const wait=Math.max(0,x.slot.start-rawArrival);
-      const late=Math.max(0,arrival-x.slot.end);
-      const score=(late?100000+late*100:0)+wait*0.35+distance*3;
-      return {...x,distance,travelMinutes:travel,arrivalMinutes:arrival,waitMinutes:wait,timingRisk:late>0,lateMinutes:late,score};
-    }).sort((a,b)=>a.score-b.score||a.arrivalMinutes-b.arrivalMinutes);
-    const chosen=ranked[0],idx=remaining.findIndex(x=>x.doctor.id===chosen.doctor.id);
-    remaining.splice(idx,1);route.push(chosen);pLat=num(chosen.doctor.latitude);pLng=num(chosen.doctor.longitude);clock=chosen.arrivalMinutes+12;
+    const ranked=remaining.map(x=>{const distance=haversineKm(pLat,pLng,x.doctor.latitude,x.doctor.longitude),travel=Math.max(4,Math.round(distance/24*60)),rawArrival=clock+travel,arrival=Math.max(rawArrival,x.slot.start),wait=Math.max(0,x.slot.start-rawArrival),late=Math.max(0,arrival-x.slot.end);return {...x,distance,travelMinutes:travel,arrivalMinutes:arrival,waitMinutes:wait,timingRisk:late>0,lateMinutes:late};}).sort((a,b)=>a.distance-b.distance||a.arrivalMinutes-b.arrivalMinutes);
+    const chosen=ranked[0],idx=remaining.findIndex(x=>x.doctor.id===chosen.doctor.id);remaining.splice(idx,1);route.push(chosen);pLat=num(chosen.doctor.latitude);pLng=num(chosen.doctor.longitude);clock=chosen.arrivalMinutes+12;
   }
   return route;
 }
 function groupedHospitalRouteCandidates(lat,lng,includeVisited=false){
   const visited=new Set(rowsForDay().map(v=>v.doctorId).filter(Boolean)),groups=new Map();
-  state.doctors.forEach(doctor=>{
-    const slot=todaySlot(doctor);if(!slot||!num(doctor.latitude)||!num(doctor.longitude)||(visited.has(doctor.id)&&!includeVisited))return;
-    const key=doctor.placeId?`place:${doctor.placeId}`:`gps:${num(doctor.latitude).toFixed(4)},${num(doctor.longitude).toFixed(4)}:${norm(doctorHospital(doctor))}`;
-    if(!groups.has(key))groups.set(key,{key,type:'hospital',hospital:doctorHospital(doctor)||doctorDisplayName(doctor),address:doctor.address||doctor.area||'',latitude:num(doctor.latitude),longitude:num(doctor.longitude),doctors:[]});
-    groups.get(key).doctors.push({doctor,slot});
-  });
-  const remaining=[...groups.values()].map(g=>{g.doctors.sort((a,b)=>a.slot.end-b.slot.end||a.slot.start-b.slot.start);g.slot=g.doctors[0].slot;g.doctor=g.doctors[0].doctor;return g;}),route=[];
-  let pLat=num(lat),pLng=num(lng),clock=now().getHours()*60+now().getMinutes();
-  while(remaining.length){
-    const ranked=remaining.map(stop=>{
-      const distance=haversineKm(pLat,pLng,stop.latitude,stop.longitude),travel=Math.max(4,Math.round(distance/24*60)),rawArrival=clock+travel,arrival=Math.max(rawArrival,stop.slot.start),wait=Math.max(0,stop.slot.start-rawArrival),late=Math.max(0,arrival-stop.slot.end);
-      return {...stop,distance,travelMinutes:travel,arrivalMinutes:arrival,waitMinutes:wait,timingRisk:late>0,lateMinutes:late};
-    }).sort((a,b)=>a.distance-b.distance||a.timingRisk-b.timingRisk||a.arrivalMinutes-b.arrivalMinutes);
-    const chosen=ranked[0],idx=remaining.findIndex(x=>x.key===chosen.key);remaining.splice(idx,1);route.push(chosen);pLat=chosen.latitude;pLng=chosen.longitude;clock=chosen.arrivalMinutes+Math.max(12,chosen.doctors.length*8);
-  }
+  state.doctors.forEach(doctor=>{const slot=todaySlot(doctor);if(!slot||!num(doctor.latitude)||!num(doctor.longitude)||!doctorEligibility(doctor).eligible||(visited.has(doctor.id)&&!includeVisited))return;const key=doctor.placeId?`place:${doctor.placeId}`:`gps:${num(doctor.latitude).toFixed(4)},${num(doctor.longitude).toFixed(4)}:${norm(doctorHospital(doctor))}`;if(!groups.has(key))groups.set(key,{key,type:'hospital',hospital:doctorHospital(doctor)||doctorDisplayName(doctor),address:doctor.address||doctor.area||'',latitude:num(doctor.latitude),longitude:num(doctor.longitude),doctors:[]});groups.get(key).doctors.push({doctor,slot});});
+  const remaining=[...groups.values()].map(g=>{g.doctors.sort((a,b)=>a.slot.end-b.slot.end||a.slot.start-b.slot.start);g.slot=g.doctors[0].slot;g.doctor=g.doctors[0].doctor;return g;}),route=[];let pLat=num(lat),pLng=num(lng),clock=now().getHours()*60+now().getMinutes();
+  while(remaining.length){const ranked=remaining.map(stop=>{const distance=haversineKm(pLat,pLng,stop.latitude,stop.longitude),travel=Math.max(4,Math.round(distance/24*60)),rawArrival=clock+travel,arrival=Math.max(rawArrival,stop.slot.start),wait=Math.max(0,stop.slot.start-rawArrival),late=Math.max(0,arrival-stop.slot.end);return {...stop,distance,travelMinutes:travel,arrivalMinutes:arrival,waitMinutes:wait,timingRisk:late>0,lateMinutes:late};}).sort((a,b)=>a.distance-b.distance||a.arrivalMinutes-b.arrivalMinutes);const chosen=ranked[0],idx=remaining.findIndex(x=>x.key===chosen.key);remaining.splice(idx,1);route.push(chosen);pLat=chosen.latitude;pLng=chosen.longitude;clock=chosen.arrivalMinutes+Math.max(12,chosen.doctors.length*8);}
   return route;
 }
 function googleRouteUrl(lat,lng,route){
@@ -494,54 +544,36 @@ function nearbyResultCard(x){
   const doctors=(x.doctorIds||[]).map(doctorById).filter(Boolean),timings=doctors.map(doctorMeetingStatus),available=timings.filter(t=>t.state==='available').length;
   const timingText=available?`${available} doctor${available===1?'':'s'} available now`:doctors.length?`${doctors.length} linked doctor${doctors.length===1?'':'s'}`:'No linked doctor yet';
   const hours=(x.openingHours||[]).slice(0,2).join(' • ');
-  return `<button class="nearby-place-card plain-button" data-nearby-place-id="${esc(x.id)}"><div class="nearby-place-distance">${esc(x.distanceKm.toFixed(2))}<small>km</small></div><div class="nearby-place-copy"><h3>${esc(x.name)}</h3><p>${esc(x.address||'Address unavailable')}</p><small>${esc(timingText)}${hours?` • ${esc(hours)}`:''}</small></div><span class="source-pill ${x.source==='live'?'live':''}">${x.source==='live'?'Google':'Saved'}</span></button>`;
+  return `<button class="nearby-place-card plain-button" data-nearby-place-id="${esc(x.id)}"><div class="nearby-place-distance">${esc(x.distanceKm.toFixed(2))}<small>km</small></div><div class="nearby-place-copy"><h3>${esc(x.name)}</h3><p>${esc(x.address||'Address unavailable')}</p><small>${esc(timingText)}${hours?` • ${esc(hours)}`:''}</small></div><span class="source-pill">Saved GPS</span></button>`;
 }
-function mergeNearbyPlaces(saved,live,lat,lng,radiusMeters){
-  const all=[],seen=new Set();
-  [...saved,...live].forEach(x=>{
-    const distanceKm=x.distanceKm??haversineKm(lat,lng,x.latitude,x.longitude);if(distanceKm*1000>radiusMeters)return;
-    const key=x.placeId?`p:${x.placeId}`:`n:${norm(x.name)}:${Number(x.latitude).toFixed(3)}:${Number(x.longitude).toFixed(3)}`;
-    if(seen.has(key))return;seen.add(key);const savedMatch=saved.find(s=>(x.placeId&&s.placeId===x.placeId)||(!x.placeId&&norm(s.name)===norm(x.name)&&haversineKm(s.latitude,s.longitude,x.latitude,x.longitude)<0.12));
-    all.push({...x,distanceKm,doctorIds:savedMatch?.doctorIds||x.doctorIds||[],source:savedMatch?'saved':x.source});
-  });
-  return all.sort((a,b)=>a.distanceKm-b.distanceKm);
-}
-window.__mrNearbyPlaces=(prefix,ok,json,error)=>{
-  const out=$('#nearbyResults'),status=$('#nearbyLiveStatus');if(!out)return;
-  if(!ok){if(status)status.textContent=error||'Live hospital search unavailable.';return;}
-  try{
-    const live=JSON.parse(json||'[]').filter(x=>Number.isFinite(Number(x.latitude))&&Number.isFinite(Number(x.longitude))).map((x,i)=>({...x,latitude:num(x.latitude),longitude:num(x.longitude),id:`live:${x.placeId||i}`,source:'live',doctorIds:[]}));
-    live.forEach(x=>nearbyPlaceCache.set(x.id,x));
-    const lat=num($('#nearbyLatitude').value),lng=num($('#nearbyLongitude').value),radius=num($('#nearbyRadius').value)||1000,saved=savedHospitalGroups(lat,lng,radius),merged=mergeNearbyPlaces(saved,live,lat,lng,radius);
-    merged.forEach(x=>nearbyPlaceCache.set(x.id,x));out.innerHTML=merged.length?merged.map(nearbyResultCard).join(''):empty('No hospital or clinic found in this radius.');
-    if(status)status.textContent=`${live.length} live places received • Powered by Google`;
-  }catch(e){if(status)status.textContent=`Could not read live results: ${e.message}`;}
-};
 function chooseNearbyHospital(place){
   if(!place)return;const linked=(place.doctorIds||[]).map(doctorById).filter(Boolean);
-  openSheet(place.name,`${place.distanceKm.toFixed(2)} km away • ${place.source==='live'?'Google place':'saved master location'}`,`<div class="detail-section"><h4>Hospital details</h4><div class="note-box">${esc(place.address||'Address unavailable')}<br><a href="${mapUrl(place.latitude,place.longitude)}" target="_blank" rel="noopener">Open exact map</a></div></div><div class="detail-section"><h4>Which doctor do you want to meet?</h4><div id="nearbyDoctorResults">${linked.length?linked.map(d=>`<button class="mini-card plain-button" data-nearby-doctor-id="${d.id}"><span class="mini-icon">⚕</span><span class="mini-copy"><h3>${esc(d.name)}</h3><p>${esc([doctorMeetingStatus(d).label,linkedChemist(d)?.name].filter(Boolean).join(' • '))}</p></span></button>`).join(''):empty('No doctor is linked to this hospital yet. Search the accurate doctor below.')}</div><label class="search-box nearby-doctor-search"><span>⌕</span><input id="nearbyDoctorSearch" type="search" placeholder="Search accurate doctor name…"></label><div id="nearbyDoctorSearchResults" class="search-results lookup-results hidden"></div></div><div class="google-attribution">Powered by Google when live place data is shown.</div>`);
-  const selectDoctor=id=>{const d=doctorById(id);if(!d)return;d.hospital=place.name;d.address=place.address||d.address;d.latitude=place.latitude;d.longitude=place.longitude;d.placeId=place.placeId||d.placeId||'';d.hospitalOpeningHours=place.openingHours||d.hospitalOpeningHours||[];d.locationSource=place.source==='live'?'Google Places':'Saved location';d.locationCapturedAt=new Date().toISOString();d.updatedAt=new Date().toISOString();saveState(false);closeSheet();quickMeeting(d.id,'');toast('Hospital name and exact location linked to doctor.');};
+  openSheet(place.name,`${place.distanceKm.toFixed(2)} km away • saved master GPS`,`<div class="detail-section"><h4>Hospital details</h4><div class="note-box">${esc(place.address||'Address unavailable')}<br><a href="${mapUrl(place.latitude,place.longitude)}" target="_blank" rel="noopener">Open exact map</a></div></div><div class="detail-section"><h4>Which doctor do you want to meet?</h4><div id="nearbyDoctorResults">${linked.length?linked.map(d=>`<button class="mini-card plain-button" data-nearby-doctor-id="${d.id}"><span class="mini-icon">⚕</span><span class="mini-copy"><h3>${esc(d.name)}</h3><p>${esc([doctorMeetingStatus(d).label,linkedChemist(d)?.name].filter(Boolean).join(' • '))}</p></span></button>`).join(''):empty('No doctor is linked to this hospital yet. Search the accurate doctor below.')}</div><label class="search-box nearby-doctor-search"><span>⌕</span><input id="nearbyDoctorSearch" type="search" placeholder="Search accurate doctor name…"></label><div id="nearbyDoctorSearchResults" class="search-results lookup-results hidden"></div></div>`);
+  const selectDoctor=id=>{const d=doctorById(id);if(!d)return;d.hospital=place.name;d.address=place.address||d.address;d.latitude=place.latitude;d.longitude=place.longitude;d.placeId=place.placeId||d.placeId||'';d.hospitalOpeningHours=place.openingHours||d.hospitalOpeningHours||[];d.locationSource='Saved/verified field GPS';d.locationCapturedAt=new Date().toISOString();d.updatedAt=new Date().toISOString();saveState(false);closeSheet();quickMeeting(d.id,'');toast('Hospital name and exact location linked to doctor.');};
   $('#nearbyDoctorResults').addEventListener('click',e=>{const b=e.target.closest('[data-nearby-doctor-id]');if(b)selectDoctor(b.dataset.nearbyDoctorId);});
   const input=$('#nearbyDoctorSearch'),results=$('#nearbyDoctorSearchResults');input.addEventListener('input',()=>{const q=clean(input.value).toLowerCase();if(!q){results.classList.add('hidden');return;}const list=state.doctors.filter(d=>[d.name,doctorHospital(d),d.area,d.address].join(' ').toLowerCase().includes(q)).slice(0,12);results.innerHTML=list.length?list.map(d=>`<button type="button" data-nearby-doctor-id="${d.id}"><strong>${esc(d.name)}</strong><small>${esc(doctorHospital(d)||'Hospital not linked')}</small></button>`).join(''):empty('No doctor match. Add the doctor first from Doctors.');results.classList.remove('hidden');});
   results.addEventListener('click',e=>{const b=e.target.closest('[data-nearby-doctor-id]');if(b)selectDoctor(b.dataset.nearbyDoctorId);});
 }
 function discoverNearbyHospitals(){
   nearbyPlaceCache.clear();const defaultRadius=num(state.settings.nearbyRadiusMeters)||1000;
-  openSheet('Nearby hospitals','Stand at the location, fetch GPS, then select the hospital and accurate doctor.',`<div class="location-card"><div class="location-head"><div><strong>My current location</strong><small id="nearbyLocationStatus" class="location-status loading">Preparing GPS…</small></div><button type="button" id="nearbyFetchLocation" class="btn secondary compact">Fetch GPS</button></div><a id="nearbyLocationMap" class="hidden" target="_blank" rel="noopener">View my map</a><input id="nearbyLatitude" type="hidden"><input id="nearbyLongitude" type="hidden"><input id="nearbyAccuracy" type="hidden"><input id="nearbyCapturedAt" type="hidden"></div><div class="nearby-controls"><label><span>Search radius</span><select id="nearbyRadius"><option value="500" ${defaultRadius===500?'selected':''}>500 m</option><option value="1000" ${defaultRadius===1000?'selected':''}>1 km</option><option value="2000" ${defaultRadius===2000?'selected':''}>2 km</option><option value="5000" ${defaultRadius===5000?'selected':''}>5 km</option></select></label><button id="nearbyLiveSearchBtn" type="button" class="btn primary">Search live hospitals</button></div><small id="nearbyLiveStatus" class="muted-line">Saved hospitals appear first. Live search needs a configured Google Places API key and internet.</small><div id="nearbyResults">${empty('Fetching current location…')}</div><div class="google-attribution">Powered by Google • live place results</div>`);
-  const renderSaved=()=>{const lat=num($('#nearbyLatitude').value),lng=num($('#nearbyLongitude').value),radius=num($('#nearbyRadius').value)||1000;if(!lat||!lng)return;state.settings.nearbyRadiusMeters=radius;saveState(false);const saved=savedHospitalGroups(lat,lng,radius);saved.forEach(x=>nearbyPlaceCache.set(x.id,x));$('#nearbyResults').innerHTML=saved.length?saved.map(nearbyResultCard).join(''):empty('No saved hospital in this radius. Tap Search live hospitals.');};
+  openSheet('Nearby hospitals','Stand at the location, fetch GPS, then select the hospital and accurate doctor.',`<div class="location-card"><div class="location-head"><div><strong>My current location</strong><small id="nearbyLocationStatus" class="location-status loading">Preparing GPS…</small></div><button type="button" id="nearbyFetchLocation" class="btn secondary compact">Fetch GPS</button></div><a id="nearbyLocationMap" class="hidden" target="_blank" rel="noopener">View my map</a><input id="nearbyLatitude" type="hidden"><input id="nearbyLongitude" type="hidden"><input id="nearbyAccuracy" type="hidden"><input id="nearbyCapturedAt" type="hidden"></div><div class="nearby-controls"><label><span>Search radius</span><select id="nearbyRadius"><option value="500" ${defaultRadius===500?'selected':''}>500 m</option><option value="1000" ${defaultRadius===1000?'selected':''}>1 km</option><option value="2000" ${defaultRadius===2000?'selected':''}>2 km</option><option value="5000" ${defaultRadius===5000?'selected':''}>5 km</option></select></label><button id="nearbyLiveSearchBtn" type="button" class="btn primary">Refresh saved nearby</button></div><small id="nearbyLiveStatus" class="muted-line">Uses only saved doctor/hospital GPS. No Maps/Places API required.</small><div id="nearbyResults">${empty('Fetching current location…')}</div>`);
+  const renderSaved=()=>{const lat=num($('#nearbyLatitude').value),lng=num($('#nearbyLongitude').value),radius=num($('#nearbyRadius').value)||1000;if(!lat||!lng)return;state.settings.nearbyRadiusMeters=radius;saveState(false);const saved=savedHospitalGroups(lat,lng,radius);saved.forEach(x=>nearbyPlaceCache.set(x.id,x));$('#nearbyResults').innerHTML=saved.length?saved.map(nearbyResultCard).join(''):empty('No saved hospital GPS in this radius.');};
   document.addEventListener('mr-location-ready',e=>{if(e.detail.prefix==='nearby')renderSaved();},{once:true});
   $('#nearbyRadius').addEventListener('change',renderSaved);$('#nearbyResults').addEventListener('click',e=>{const b=e.target.closest('[data-nearby-place-id]');if(b)chooseNearbyHospital(nearbyPlaceCache.get(b.dataset.nearbyPlaceId));});
-  $('#nearbyLiveSearchBtn').addEventListener('click',()=>{const lat=num($('#nearbyLatitude').value),lng=num($('#nearbyLongitude').value),radius=num($('#nearbyRadius').value)||1000;if(!lat||!lng){toast('Fetch current GPS first.');return;}const status=$('#nearbyLiveStatus');status.textContent='Searching live hospitals and clinics…';if(window.AndroidBridge?.searchNearbyHospitals){window.AndroidBridge.searchNearbyHospitals('nearby',lat,lng,radius);return;}status.textContent='Live search is available in the Android APK. Saved nearby hospitals are shown above.';});
+  $('#nearbyLiveSearchBtn').addEventListener('click',()=>{const lat=num($('#nearbyLatitude').value),lng=num($('#nearbyLongitude').value),radius=num($('#nearbyRadius').value)||1000;if(!lat||!lng){toast('Fetch current GPS first.');return;}state.settings.nearbyRadiusMeters=radius;saveState(false);const saved=savedHospitalGroups(lat,lng,radius);saved.forEach(x=>nearbyPlaceCache.set(x.id,x));$('#nearbyResults').innerHTML=saved.length?saved.map(nearbyResultCard).join(''):empty('No saved hospital GPS in this radius.');$('#nearbyLiveStatus').textContent=`${saved.length} saved hospital stop(s) in range.`;});
   setupLocationCapture('nearby',true);
 }
 
   function renderAll() { renderHeader(); renderDashboard(); renderDoctors(); renderChemists(); renderVisits(); renderTools(); }
   function renderHeader() {
-    $('#profileLine').textContent = `${state.profile.hq || 'My HQ'} • ${state.profile.tmName || 'TM'}`;
+    $('#profileLine').textContent = `${state.profile.hq || 'My HQ'} • ${state.profile.tmName || 'My profile'}`;
     const h=now().getHours();
     $('#greeting').textContent = h<12?'Good morning':h<17?'Good afternoon':'Good evening';
     $('#todayLabel').textContent = now().toLocaleDateString('en-IN',{weekday:'short',day:'2-digit',month:'short'}).toUpperCase();
-    $('#routeLabel').textContent = state.settings.workflowMode==='collect'?'Data gathering mode: save doctor, hospital, chemist, timing and verify hospital GPS once.':'Search doctor or hospital → timing → feedback / order → save.';
+    $('#routeLabel').textContent = state.settings.workflowMode==='collect'?'Finish missing master data only when needed. Your normal field flow stays simple.':'Doctor calls, chemist work, POB, follow-ups and report — all from Today.';
+    const saved=$('#lastSavedStatus');
+    if(saved){const last=state.settings.lastSavedAt; saved.textContent=last?`Saved ${prettyTime(last)}`:'Offline ready';}
+    const health=$('#saveHealth'); if(health) health.classList.toggle('recovered',num(state.settings.recoveryCount)>0);
   }
   function renderDashboard() {
     const today=localISODate(), t=statsForDay(today), c=statsForMonth(today);
@@ -549,7 +581,7 @@ function discoverNearbyHospitals(){
     $('#reportKpis').innerHTML=METRICS.map(([k,label])=>`<div class="report-kpi"><small>${esc(label)}</small><strong>${esc(formatMetric(k,t[k]))} <span>/ ${esc(formatMetric(k,c[k]))}</span></strong></div>`).join('');
     $('#doctorCount').textContent=state.doctors.length;
     $('#chemistCount').textContent=state.chemists.length;
-    $('#todayVisitCount').textContent=rowsForDay(today).filter(v=>v.doctorId||v.chemistId).length;
+    $('#todayVisitCount').textContent=num(t.calls);
     const due=dueEntities(); $('#dueCount').textContent=due.length;
     const activities=rowsForDay(today).filter(v=>v.doctorId||v.chemistId).sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,6);
     $('#todayActivityList').innerHTML=activities.length?activities.map(miniActivity).join(''):empty('No meeting logged today. Tap + to start.');
@@ -566,7 +598,7 @@ function discoverNearbyHospitals(){
     $('#routeReadyText').textContent=routeReady?`${routeReady} unvisited doctors have saved timing + hospital GPS`:`Add doctor timing and verify hospital GPS once`;
     renderMachineDashboard();
     const orders=ordersForDay().sort((a,b)=>String(b.date).localeCompare(String(a.date)));
-    $('#todayOrderCount').textContent=orders.length;
+    $('#todayOrderCount').textContent=`${orders.length} ${orders.length===1?'order':'orders'}`;
     $('#todayOrderValue').textContent=`₹${orders.reduce((n,o)=>n+orderTotal(o),0).toLocaleString('en-IN')}`;
     $('#recentOrderList').innerHTML=orders.length?orders.slice(0,4).map(orderMiniCard).join(''):empty('No distributor order today.');
   }
@@ -627,7 +659,7 @@ function orderMiniCard(o){
       [r.needsCompletion&&'Needs completion',r.latitude&&'Clinic GPS',r.lastVisit&&`Last ${prettyDate(r.lastVisit)}`,r.nextFollowUp&&`Due ${prettyDate(r.nextFollowUp)}`].filter(Boolean):
       [fb.prescribed&&`${fb.prescribed} prescribed`,fb.notPrescribed&&`${fb.notPrescribed} not prescribed`,r.latitude&&'Shop GPS'].filter(Boolean);
     const timingTag=isDoctor&&timing.state!=='unset'?`<span class="tag timing ${timing.state==='available'?'good':''}">${esc(timing.label)}</span>`:'';
-    return `<article class="record-card"><div class="record-top"><div class="avatar">${esc(initials(r.name))}</div><div class="record-title"><h3>${esc(isDoctor?doctorDisplayName(r):r.name)}</h3><p>${esc(subtitle||'Details not added')}</p></div></div>${r.address?`<p class="record-note">${esc(r.address).slice(0,180)}</p>`:''}<div class="tag-row">${timingTag}${tags.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div><div class="record-actions three">${map?`<a href="${map}" target="_blank" rel="noopener">Map</a>`:`<button data-action="edit-record" data-type="${type}" data-id="${r.id}">Add location</button>`}<button class="primary-action" data-action="log-record" data-type="${type}" data-id="${r.id}">Meet</button><button data-action="view-record" data-type="${type}" data-id="${r.id}">View</button></div></article>`;
+    return `<article class="record-card"><div class="record-top"><div class="avatar">${esc(initials(r.name))}</div><div class="record-title"><h3>${esc(isDoctor?doctorDisplayName(r):r.name)}</h3><p>${esc(subtitle||'Details not added')}</p></div></div>${r.address?`<p class="record-note">${esc(r.address).slice(0,180)}</p>`:''}<div class="tag-row">${timingTag}${tags.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div><div class="record-actions three">${map?`<a href="${map}" target="_blank" rel="noopener">Map</a>`:`<button data-action="edit-record" data-type="${type}" data-id="${r.id}">Add location</button>`}<button class="primary-action" data-action="${isDoctor?'log-record':'chemist-visit'}" data-type="${type}" data-id="${r.id}">${isDoctor?'Meet':'Visit'}</button><button data-action="view-record" data-type="${type}" data-id="${r.id}">View</button></div></article>`;
   }
 
   function renderVisits() {
@@ -661,7 +693,7 @@ function orderMiniCard(o){
     activePage=page;
     $$('.page').forEach(p=>p.classList.toggle('active',p.dataset.page===page));
     $$('.bottom-nav button').forEach(b=>b.classList.toggle('active',b.dataset.nav===page));
-    window.scrollTo({top:0,behavior:'smooth'});
+    window.scrollTo({top:0,behavior:'auto'});
     if(page==='doctors')renderDoctors(); if(page==='chemists')renderChemists(); if(page==='visits')renderVisits();
   }
   function openSheet(title,subtitle,body) {
@@ -670,6 +702,42 @@ function orderMiniCard(o){
   }
   function closeSheet(){ if(window.AndroidBridge?.stopVoiceCapture)window.AndroidBridge.stopVoiceCapture();voiceHandlers?.clear?.();$('#sheetBackdrop').classList.add('hidden');$('#editorSheet').classList.add('hidden');document.body.style.overflow=''; }
   function toast(text){const el=$('#toast');el.textContent=text;el.classList.remove('hidden');clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.classList.add('hidden'),2600);}
+
+  window.__mrHandleBack=()=>{
+    if(!$('#editorSheet').classList.contains('hidden')){closeSheet();return true;}
+    if(activePage!=='dashboard'){navigate('dashboard');return true;}
+    return false;
+  };
+
+  function openWorkMenu(){
+    openSheet('Field work','Choose what you are doing now.',`<div class="work-menu-grid"><button data-action="quick-log"><span>⚕</span><strong>Doctor visit</strong><small>Result + product feedback</small></button><button data-action="chemist-visit"><span>Rx</span><strong>Chemist visit</strong><small>Availability + follow-up</small></button><button data-action="new-order"><span>₹</span><strong>POB order</strong><small>Chemist → distributor</small></button><button data-action="nearby-hospitals"><span>◎</span><strong>Nearby hospitals</strong><small>Saved GPS only</small></button><button data-action="plan-route"><span>⌖</span><strong>Plan route</strong><small>Remaining eligible calls</small></button><button data-action="voice-capture"><span>🎙</span><strong>Voice capture</strong><small>Save field notes quickly</small></button><button data-action="expense"><span>₹</span><strong>Expense</strong><small>Travel / food / stay</small></button><button data-action="day-close"><span>✓</span><strong>Close day</strong><small>Review + share report</small></button></div>`);
+  }
+
+  function quickChemistVisit(chemistId=''){
+    const selected=chemistById(chemistId)||null;
+    if(!state.chemists.length){openSheet('Add chemist first','Save the shop once, then every visit is fast.',`<div class="note-box">No chemist is available yet.</div><div class="button-row"><button class="btn primary" data-action="add-chemist">Add chemist</button></div>`);return;}
+    openSheet('Chemist visit','Availability, follow-up and quick field note.',`<form id="chemistVisitForm" class="sheet-form"><label><span>Chemist</span><select name="chemistId" required>${chemistOptions(selected?.id||'')}</select></label><div class="field-grid two"><label><span>New product availability</span><input name="newAvailability" type="number" min="0" step="1" value="0"></label><label><span>Conversation</span><input name="conversation" type="number" min="0" step="1" value="1"></label></div><label><span>Follow-up date (optional)</span><input name="followUpDate" type="date"></label><label><span>Visit note</span><textarea name="notes" rows="3" placeholder="Stock, order intent, retailer feedback or next action"></textarea></label><div class="chemist-visit-actions"><button type="button" class="btn secondary" id="chemistVisitOrderBtn">Create POB order</button><button type="submit" class="btn primary">Save chemist visit</button></div></form>`);
+    const form=$('#chemistVisitForm');
+    $('#chemistVisitOrderBtn').addEventListener('click',()=>{const id=clean(form.elements.chemistId.value);closeSheet();setTimeout(()=>quickOrderForChemist(id),80);});
+    form.addEventListener('submit',e=>{e.preventDefault();if(form.dataset.saving==='1')return;const fd=new FormData(form),c=chemistById(fd.get('chemistId'));if(!c){toast('Select a chemist.');return;}form.dataset.saving='1';const date=localISODateTime(),followUpDate=clean(fd.get('followUpDate'));state.visits.push({id:uid('log'),date,entityType:'chemist',entityId:c.id,entityName:c.name,chemistId:c.id,chemistName:c.name,calls:0,inputs:0,basket:0,towel:0,conversation:num(fd.get('conversation')),newAvailability:num(fd.get('newAvailability')),pobValue:0,notes:clean(fd.get('notes')),followUpDate,productStatuses:{},createdAt:new Date().toISOString()});c.lastVisit=localISODate();if(followUpDate)c.nextFollowUp=followUpDate;c.updatedAt=new Date().toISOString();saveState();closeSheet();toast('Chemist visit saved.');});
+  }
+
+  function quickOrderForChemist(chemistId=''){
+    quickOrder('',chemistId);
+  }
+
+
+  function quickExpense(){
+    openSheet('Field expense','Log only what you may need for your claim.',`<form id="expenseForm" class="sheet-form"><div class="field-grid two"><label><span>Date</span><input name="date" type="date" required value="${localISODate()}"></label><label><span>Type</span><select name="type"><option>Travel</option><option>Food</option><option>Stay</option><option>Parking / Toll</option><option>Other</option></select></label></div><label><span>Amount ₹</span><input name="amount" type="number" min="0" step="0.01" required placeholder="0"></label><div class="field-grid two"><label><span>From (optional)</span><input name="from" placeholder="Area / station"></label><label><span>To (optional)</span><input name="to" placeholder="Area / station"></label></div><label><span>Note (optional)</span><textarea name="notes" rows="2" placeholder="Reason or claim reference"></textarea></label><button class="btn primary full" type="submit">Save expense</button></form>`);
+    const form=$('#expenseForm');form.addEventListener('submit',e=>{e.preventDefault();if(form.dataset.saving==='1')return;const fd=new FormData(form),amount=num(fd.get('amount'));if(amount<=0){toast('Enter expense amount.');return;}form.dataset.saving='1';state.expenses.push({id:uid('exp'),date:`${clean(fd.get('date'))||localISODate()}T${pad(now().getHours())}:${pad(now().getMinutes())}`,type:clean(fd.get('type'))||'Other',amount,from:clean(fd.get('from')),to:clean(fd.get('to')),notes:clean(fd.get('notes')),createdAt:new Date().toISOString()});saveState();closeSheet();toast('Expense saved.');});
+  }
+
+  function openDayClose(){
+    const t=statsForDay(),orders=ordersForDay(),expenses=expensesForDay(),due=dueEntities(),doctorRows=rowsForDay().filter(v=>v.doctorId),chemistRows=rowsForDay().filter(v=>v.entityType==='chemist'&&!v.doctorId);
+    openSheet('Close day',now().toLocaleDateString('en-IN',{weekday:'long',day:'2-digit',month:'short'}),`<div class="day-close-grid"><div><small>CALLS</small><strong>${num(t.calls)}</strong></div><div><small>DOCTOR LOGS</small><strong>${doctorRows.length}</strong></div><div><small>CHEMIST VISITS</small><strong>${chemistRows.length}</strong></div><div><small>POB</small><strong>₹${orders.reduce((n,o)=>n+orderTotal(o),0).toLocaleString('en-IN')}</strong></div><div><small>EXPENSE</small><strong>₹${expenseTotal().toLocaleString('en-IN')}</strong></div><div><small>FOLLOW-UPS DUE</small><strong>${due.length}</strong></div></div><div class="note-box">Your data is saved locally. Use Full backup regularly, especially before changing phones or clearing app data.</div><div class="button-row"><button class="btn secondary" id="dayCloseCopyBtn">Copy daily report</button><button class="btn primary" id="dayCloseShareBtn">Share daily report</button></div>${expenses.length?`<div class="detail-section"><h4>Expenses today</h4>${expenses.map(x=>`<div class="expense-row"><span>${esc(x.type)}${x.from||x.to?` • ${esc([x.from,x.to].filter(Boolean).join(' → '))}`:''}</span><strong>₹${num(x.amount).toLocaleString('en-IN')}</strong></div>`).join('')}</div>`:''}`);
+    $('#dayCloseCopyBtn').addEventListener('click',async()=>{const text=getReportText();try{if(window.AndroidBridge?.copyText)window.AndroidBridge.copyText(text);else await navigator.clipboard.writeText(text);toast('Daily report copied.');}catch(_){toast('Copy failed.');}});
+    $('#dayCloseShareBtn').addEventListener('click',async()=>{const text=getReportText();try{if(window.AndroidBridge?.shareText)window.AndroidBridge.shareText('MR Daily Report',text);else if(navigator.share)await navigator.share({title:'MR Daily Report',text});}catch(e){if(e.name!=='AbortError')toast('Share cancelled.');}});
+  }
 
   function doctorOptions(selected='') {
     return `<option value="">Select doctor</option>${state.doctors.slice().sort((a,b)=>doctorDisplayName(a).localeCompare(doctorDisplayName(b))).map(d=>`<option value="${esc(d.id)}" ${d.id===selected?'selected':''}>${esc(doctorDisplayName(d))}${d.area?` • ${esc(d.area)}`:''}</option>`).join('')}`;
@@ -710,12 +778,15 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
   }
 
   window.__mrNativeLocation=(prefix,ok,latitude,longitude,acc,error)=>{
+    if(ok){plannerLocation={lat:num(latitude),lng:num(longitude),accuracy:Math.round(acc||0),capturedAt:new Date().toISOString(),source:'phone GPS'};}
     const status=$(`#${prefix}LocationStatus`),map=$(`#${prefix}LocationMap`),button=$(`#${prefix}FetchLocation`),lat=$(`#${prefix}Latitude`),lng=$(`#${prefix}Longitude`),accuracy=$(`#${prefix}Accuracy`),captured=$(`#${prefix}CapturedAt`);
-    if(!status||!button)return;
-    if(ok){lat.value=latitude;lng.value=longitude;accuracy.value=Math.round(acc||0);captured.value=new Date().toISOString();status.textContent=`GPS ready • accuracy about ${Math.round(acc||0)} m`;status.className='location-status success';map.href=mapUrl(latitude,longitude);map.classList.remove('hidden');button.textContent='Refresh GPS';document.dispatchEvent(new CustomEvent('mr-location-ready',{detail:{prefix,latitude,longitude}}));}
+    if(!status||!button){if(ok)document.dispatchEvent(new CustomEvent('mr-location-ready',{detail:{prefix,latitude,longitude,accuracy:Math.round(acc||0)}}));return;}
+    if(ok){lat.value=latitude;lng.value=longitude;accuracy.value=Math.round(acc||0);captured.value=plannerLocation.capturedAt;status.textContent=`GPS ready • accuracy about ${Math.round(acc||0)} m`;status.className=acc>120?'location-status warning':'location-status success';map.href=mapUrl(latitude,longitude);map.classList.remove('hidden');button.textContent='Refresh GPS';document.dispatchEvent(new CustomEvent('mr-location-ready',{detail:{prefix,latitude,longitude,accuracy:Math.round(acc||0)}}));}
     else{status.textContent=error||'GPS unavailable. Tap Retry.';status.className='location-status error';button.textContent='Retry GPS';}
     button.disabled=false;
   };
+  window.__mrAutoPlannerLocation=()=>{if(window.AndroidBridge?.fetchLocation)window.AndroidBridge.fetchLocation('planner');};
+
 
   function setupLocationCapture(prefix, auto=true) {
     const status=$(`#${prefix}LocationStatus`), map=$(`#${prefix}LocationMap`), button=$(`#${prefix}FetchLocation`);
@@ -727,7 +798,8 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
       if(!navigator.geolocation){status.textContent='Location is not supported on this phone.';status.className='location-status error';button.disabled=false;return;}
       navigator.geolocation.getCurrentPosition(pos=>{
         const {latitude,longitude,accuracy:acc}=pos.coords;
-        lat.value=latitude;lng.value=longitude;accuracy.value=Math.round(acc||0);captured.value=new Date().toISOString();
+        plannerLocation={lat:num(latitude),lng:num(longitude),accuracy:Math.round(acc||0),capturedAt:new Date().toISOString(),source:'phone GPS'};
+        lat.value=latitude;lng.value=longitude;accuracy.value=Math.round(acc||0);captured.value=plannerLocation.capturedAt;
         status.textContent=`GPS ready • accuracy about ${Math.round(acc||0)} m`;
         status.className='location-status success';
         map.href=mapUrl(latitude,longitude);map.classList.remove('hidden');button.textContent='Refresh GPS';button.disabled=false;document.dispatchEvent(new CustomEvent('mr-location-ready',{detail:{prefix,latitude,longitude}}));
@@ -925,7 +997,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
     let doctor=doctorById(doctorId)||null;
     let chemist=requestedChemist||linkedChemist(doctor)||null;
     const remembered=doctor?latestStatuses(doctor.id,chemist?.id||''):{};
-    openSheet('Log meeting','Search doctor or hospital; linked details fill automatically.',`
+    openSheet('Doctor visit','Choose doctor, record the result, update only what changed.',`
       <form id="meetingForm" class="sheet-form">
         ${voiceControlsHtml('meeting')}
         <div class="lookup-label field-block"><span class="field-caption">Search doctor or hospital</span>
@@ -935,8 +1007,8 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
             <div id="meetingDoctorResults" class="search-results lookup-results hidden"></div>
           </div>
         </div>
-        <div class="schedule-card master-data-card">
-          <div class="form-section-title"><h3>Hospital, pharmacy & doctor timing</h3><p>Confirm once. These details are saved to the doctor master and auto-fill next time.</p></div>
+        <details class="schedule-card master-data-card flow-disclosure"><summary><span><strong>Doctor master details</strong><small>Open only if hospital, chemist or timing changed</small></span><b>EDIT</b></summary><div class="flow-disclosure-body">
+          <div class="form-section-title"><h3>Hospital, pharmacy & doctor timing</h3><p>Change only what is different today. Saved details continue to auto-fill.</p></div>
           <label><span>Hospital / clinic name</span><input id="meetingHospital" name="hospital" value="${esc(doctorHospital(doctor))}" placeholder="Enter hospital or clinic name" autocomplete="off"></label>
           <div class="lookup-label field-block"><span class="field-caption">Doctor under pharmacy / chemist</span>
             <div class="lookup-field chemist-lookup-field">
@@ -954,28 +1026,28 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
             <label><span>Second meeting to</span><input name="meetingTo2" type="time" value="${esc(normalizeTime(doctor?.meetingTo2))}"></label>
           </div>
           <label class="toggle-line timing-pending-line"><input id="meetingTimingPending" name="timingPending" type="checkbox" ${doctor&&doctorMeetingSlots(doctor).length?'':'checked'}> Meeting timing is not confirmed yet</label>
-        </div>
+        </div></details>
         <div id="meetingSummary">${meetingSummaryHtml(doctor,chemist)}</div>
-        <div class="location-card">
-          <div class="location-head"><div><strong>Hospital location verification (optional)</strong><small id="meetLocationStatus" class="location-status">GPS runs only when you tap Verify.</small></div><button type="button" id="meetFetchLocation" class="btn secondary compact">Verify hospital GPS</button></div>
+        <details class="flow-disclosure location-flow"><summary><span><strong>Hospital GPS verification</strong><small>Optional • use only when confirming/changing location</small></span><b>GPS</b></summary><div class="location-card">
+          <div class="location-head"><div><strong>Verify this hospital location</strong><small id="meetLocationStatus" class="location-status">GPS runs only when you tap Verify.</small></div><button type="button" id="meetFetchLocation" class="btn secondary compact">Verify hospital GPS</button></div>
           <div class="location-actions"><a id="meetLocationMap" class="hidden" target="_blank" rel="noopener">View captured map</a><label class="save-location-check"><input id="meetSaveLocation" type="checkbox"> Attach captured GPS to this record</label></div><label class="toggle-line master-location-line"><input id="meetUpdateDoctorLocation" type="checkbox" ${doctor&&!doctor.latitude?'checked':''}> Save as doctor/hospital verified location</label><small id="meetLocationAudit" class="muted-line">No background GPS and no attendance tracking. Location is used only for doctor/hospital data verification.</small>
           <input id="meetLatitude" type="hidden"><input id="meetLongitude" type="hidden"><input id="meetAccuracy" type="hidden"><input id="meetCapturedAt" type="hidden">
-        </div>
-        <div class="form-section-title"><h3>Meeting result</h3><p>Not met select karne par Machine next suitable meeting and replacement suggest karega.</p></div>
+        </div></details>
+        <div class="flow-step-label"><span>1</span><div><strong>Meeting result</strong><small>Tap one option. Not-met automatically suggests the next slot and replacement.</small></div></div>
         <input type="hidden" name="visitOutcome" value="met">
         <div id="meetingOutcomeSelector" class="outcome-selector">
           <button type="button" class="selected" data-outcome="met">Doctor met</button><button type="button" data-outcome="not_met">Not met</button><button type="button" data-outcome="leave">On leave</button><button type="button" data-outcome="ot">In OT</button><button type="button" data-outcome="closed">Hospital closed</button><button type="button" data-outcome="timing_changed">Timing changed</button>
         </div>
         <div id="notMetIntelligence" class="intelligence-preview hidden"></div>
         <label id="notMetReasonLabel" class="hidden"><span>Reason / receptionist update</span><input name="notMetReason" placeholder="Example: doctor will come Friday evening"></label>
-        <div class="form-section-title"><h3>What chemist says</h3><p>Previous status is prefilled. Tap only what changed.</p></div>
+        <div class="flow-step-label"><span>2</span><div><strong>Product feedback</strong><small>Previous status is remembered. Tap only what changed.</small></div></div>
         <div id="meetingProductRows" class="product-status-list">${productRows(remembered)}</div>
         <label><span>Short meeting note (optional)</span><textarea name="notes" rows="2" placeholder="Commitment or next action only"></textarea></label>
         <label><span>Follow-up date (optional)</span><input name="followUpDate" type="date"></label>
         <details class="more-fields order-panel"><summary>POB / Distributor order (optional)</summary><div class="order-panel-body"><label class="toggle-line"><input id="meetingOrderPlaced" name="orderPlaced" type="checkbox"> Order placed to distributor</label><label><span>Distributor</span><select name="distributorId">${distributorOptions(preferredDistributor(chemist)?.id||'')}</select></label><div id="meetingOrderItems" class="order-items">${orderItemRow({},0)}</div><button type="button" id="addMeetingOrderItem" class="btn secondary compact">+ Add product</button><div class="order-total-line"><span>Order / POB total</span><strong data-order-total>₹0</strong></div><label><span>Order note</span><textarea name="orderNote" rows="2" placeholder="Delivery, urgency or commitment"></textarea></label></div></details>
         <details class="more-fields"><summary>More daily report items (optional)</summary><div class="inline-metrics">${METRICS.filter(([k])=>k!=='calls'&&k!=='pobValue').map(([k,label])=>`<label><span>${esc(label)}</span><input name="${k}" type="number" min="0" step="1" value="0"></label>`).join('')}<label><span>Other POB Value</span><input name="pobValue" type="number" min="0" step="0.01" value="0"></label></div></details>
         <input name="date" type="hidden" value="${esc(localISODateTime())}">
-        <div class="sticky-save"><button type="submit" class="btn primary full">Save meeting + 1 call</button></div>
+        <div class="sticky-save"><button type="submit" class="btn primary full">Save doctor visit</button></div>
       </form>`);
     const form=$('#meetingForm'), doctorInput=$('#meetingDoctorSearch'), doctorIdInput=$('#meetingDoctorId'), doctorResults=$('#meetingDoctorResults'), chemistSelect=form.elements.chemistId, chemistInput=$('#meetingChemistSearch'), chemistResults=$('#meetingChemistResults'), orderDistributorSelect=form.elements.distributorId, hospitalInput=form.elements.hospital, timingPending=$('#meetingTimingPending');
     const doctorScore=(d,q)=>{
@@ -1116,6 +1188,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
       if(updateMasterLocation&&distanceFromSaved&&distanceFromSaved>500&&!confirm(`Current GPS is ${distanceFromSaved.toLocaleString('en-IN')} m from the saved hospital location. Replace the hospital master location?`))return;
       if(orderPlaced&&!distributor){toast('Select distributor for the order.');return;}
       if(orderPlaced&&!orderItems.length){toast('Add at least one ordered product.');return;}
+      if(form.dataset.saving==='1')return;form.dataset.saving='1';const submitBtn=$('button[type="submit"]',form);if(submitBtn){submitBtn.disabled=true;submitBtn.textContent='Saving…';}
       const meetingDoctor={...d,hospital,meetingDays:days,meetingFrom:from,meetingTo:to,meetingFrom2:from2,meetingTo2:to2},nextSuggested=NOT_MET_OUTCOMES.has(outcome)?nextMeetingOccurrence(meetingDoctor,now(),true):null,replacement=NOT_MET_OUTCOMES.has(outcome)?replacementDoctor(d.id):null,autoFollowUp=clean(fd.get('followUpDate'))||(nextSuggested?.date||'');
       const row={
         id:uid('log'),date:fd.get('date')||localISODateTime(),entityType:'doctor',entityId:d.id,entityName:d.name,
@@ -1129,13 +1202,14 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
       if(orderPlaced){const order={id:uid('ord'),date:row.date,doctorId:d.id,doctorName:d.name,doctorHospital:hospital,chemistId:c?.id||'',chemistName:c?.name||'',distributorId:distributor.id,distributorName:distributor.name,items:orderItems,totalValue:row.pobValue,status:'placed',notes:clean(fd.get('orderNote')),visitId:row.id,latitude:row.latitude,longitude:row.longitude,createdAt:new Date().toISOString()};state.orders.push(order);row.orderId=order.id;if(c){c.linkedDistributorId=distributor.id;c.distributorName=distributor.name;}distributor.lastOrderDate=String(row.date).slice(0,10);}
       d.hospital=hospital;
       if(!isTimingPending){d.meetingDays=days;d.meetingFrom=from;d.meetingTo=to;d.meetingFrom2=from2;d.meetingTo2=to2;}
-      d.lastAttempt=String(row.date).slice(0,10);if(outcome==='met')d.lastVisit=d.lastAttempt;d.updatedAt=new Date().toISOString();
+      d.lastAttempt=String(row.date).slice(0,10);if(outcome==='met'){d.lastVisit=d.lastAttempt;const ne=new Date(`${d.lastVisit}T00:00:00`);ne.setDate(ne.getDate()+15);d.nextEligibleDate=localISODate(ne);d.monthlyVisitLimit=2;d.minimumVisitGapDays=15;}d.updatedAt=new Date().toISOString();
       if(c){d.linkedChemistId=c.id;d.chemistName=c.name;if(outcome==='met')c.lastVisit=d.lastAttempt;c.updatedAt=new Date().toISOString();}
       if(row.followUpDate){d.nextFollowUp=row.followUpDate;if(c)c.nextFollowUp=row.followUpDate;}
       if(row.latitude&&row.longitude&&updateMasterLocation){d.latitude=row.latitude;d.longitude=row.longitude;d.locationAccuracy=row.locationAccuracy;d.locationCapturedAt=row.locationCapturedAt;d.locationSource='Visit GPS verified';row.hospitalLatitude=row.latitude;row.hospitalLongitude=row.longitude;row.distanceFromHospitalM=0;row.locationAuditStatus='Verified at hospital';}
+      if(NOT_MET_OUTCOMES.has(outcome)&&replacement)addDynamicReplacementToTodayPatch(d,replacement);
       if(NOT_MET_OUTCOMES.has(outcome)){state.reschedules.filter(r=>r.doctorId===d.id&&r.status==='pending').forEach(r=>r.status='replaced');state.reschedules.push({id:uid('res'),doctorId:d.id,doctorName:d.name,hospital:doctorHospital(d),sourceVisitId:row.id,reason:notMetReason||OUTCOME_LABELS[outcome],createdAt:new Date().toISOString(),scheduledDate:nextSuggested?.date||row.followUpDate||'',scheduledDateTime:nextSuggested?.dateTime||'',meetingFrom:nextSuggested?.from||'',meetingTo:nextSuggested?.to||'',replacementDoctorId:replacement?.doctor.id||'',replacementDoctorName:replacement?doctorDisplayName(replacement.doctor):'',status:'pending'});}
       else state.reschedules.filter(r=>r.doctorId===d.id&&r.status==='pending').forEach(r=>r.status='completed');
-      state.intelligenceLog.push({id:uid('intel'),date:new Date().toISOString(),doctorId:d.id,doctorName:d.name,outcome,action:row.intelligenceAction});
+      const learnedAfter=learnedDoctorPattern(d);state.intelligenceLog.push({id:uid('intel'),date:new Date().toISOString(),doctorId:d.id,doctorName:d.name,outcome,action:row.intelligenceAction,learning:{samples:learnedAfter.samples,metRate:learnedAfter.metRate,confidence:learnedAfter.confidence,bestDays:learnedAfter.bestDays,bestHours:learnedAfter.bestHours}});
       d.needsCompletion=!(doctorHospital(d)&&linkedChemist(d)&&d.latitude&&d.longitude&&doctorMeetingSlots(d).length&&normalizeMeetingDays(d.meetingDays).length);
       saveState();closeSheet();toast(NOT_MET_OUTCOMES.has(outcome)?`Not met saved. ${nextSuggested?`Moved to ${nextSuggested.label}.`: 'Timing required.'}${replacement?` Replacement: ${replacement.doctor.name}.`:''}`:(d.needsCompletion?'Meeting saved. Missing master details remain marked pending.':'Meeting saved. Doctor master and report updated.'));
     });
@@ -1239,11 +1313,11 @@ function editScheme(id=''){
   const f=$('#schemeForm');f.addEventListener('submit',e=>{e.preventDefault();const fd=new FormData(f),start=clean(fd.get('startDate')),end=clean(fd.get('endDate'));if(end<start){toast('End date must be after start date.');return;}const rec={...old,id:id||uid('sch'),product:clean(fd.get('product')),pack:clean(fd.get('pack')),ratio:clean(fd.get('ratio')),startDate:start,endDate:end,source:clean(fd.get('source')),notes:clean(fd.get('notes')),updatedAt:new Date().toISOString()};if(!id){rec.createdAt=new Date().toISOString();state.schemes.push(rec);}else Object.assign(old,rec);saveState();closeSheet();toast('Date-wise scheme saved.');});
   $('#deleteSchemeBtn')?.addEventListener('click',()=>{if(!confirm('Delete scheme?'))return;state.schemes=state.schemes.filter(x=>x.id!==id);saveState();closeSheet();});
 }
-function quickOrder(distributorId=''){
+function quickOrder(distributorId='',chemistId=''){
   if(!state.distributors.length){editDistributor();return;}
   const dist=distributorById(distributorId);
-  openSheet('Accept distributor order','Accepted order automatically appears in today planning until marked fulfilled.',`<form id="quickOrderForm" class="sheet-form"><label><span>Chemist</span><select name="chemistId">${chemistOptions('')}</select></label><label><span>Distributor</span><select name="distributorId">${distributorOptions(dist?.id||'')}</select></label><label><span>Planning date</span><input name="planningDate" type="date" value="${localISODate()}"></label><div id="quickOrderItems" class="order-items">${orderItemRow({},0)}</div><button type="button" id="addQuickOrderItem" class="btn secondary compact">+ Add product</button><div class="order-total-line"><span>Total POB</span><strong data-order-total>₹0</strong></div><label><span>Order note</span><textarea name="notes" rows="2"></textarea></label><button class="btn primary full" type="submit">Accept order + add distributor to planning</button></form>`);
-  const wrap=$('#quickOrderItems');bindOrderItems(wrap);$('#addQuickOrderItem').addEventListener('click',()=>{wrap.insertAdjacentHTML('beforeend',orderItemRow({},wrap.children.length));});const f=$('#quickOrderForm');f.addEventListener('submit',e=>{e.preventDefault();const fd=new FormData(f),c=chemistById(fd.get('chemistId')),d=distributorById(fd.get('distributorId')),items=collectOrderItems(wrap),total=items.reduce((n,x)=>n+x.value,0);if(!c||!d||!items.length){toast('Select chemist, distributor and product.');return;}const date=localISODateTime(),order={id:uid('ord'),date,planningDate:clean(fd.get('planningDate'))||localISODate(),chemistId:c.id,chemistName:c.name,distributorId:d.id,distributorName:d.name,items,totalValue:total,status:'accepted',fulfilmentStatus:'pending',notes:clean(fd.get('notes')),createdAt:new Date().toISOString()};state.orders.push(order);state.visits.push({id:uid('log'),date,entityType:'chemist',entityId:c.id,entityName:c.name,chemistId:c.id,chemistName:c.name,calls:0,inputs:0,basket:0,towel:0,conversation:0,newAvailability:0,pobValue:total,notes:`Accepted POB order to ${d.name}${order.notes?`: ${order.notes}`:''}`,productStatuses:{},orderId:order.id,createdAt:new Date().toISOString()});c.linkedDistributorId=d.id;c.distributorName=d.name;c.lastVisit=localISODate();d.lastOrderDate=localISODate();saveState();closeSheet();toast('Order accepted. Distributor added to planning.');});
+  openSheet('Accept distributor order','Accepted order automatically appears in today planning until marked fulfilled.',`<form id="quickOrderForm" class="sheet-form"><label><span>Chemist</span><select name="chemistId">${chemistOptions(chemistId)}</select></label><label><span>Distributor</span><select name="distributorId">${distributorOptions(dist?.id||'')}</select></label><label><span>Planning date</span><input name="planningDate" type="date" value="${localISODate()}"></label><div id="quickOrderItems" class="order-items">${orderItemRow({},0)}</div><button type="button" id="addQuickOrderItem" class="btn secondary compact">+ Add product</button><div class="order-total-line"><span>Total POB</span><strong data-order-total>₹0</strong></div><label><span>Order note</span><textarea name="notes" rows="2"></textarea></label><button class="btn primary full" type="submit">Accept order + add distributor to planning</button></form>`);
+  const wrap=$('#quickOrderItems');bindOrderItems(wrap);$('#addQuickOrderItem').addEventListener('click',()=>{wrap.insertAdjacentHTML('beforeend',orderItemRow({},wrap.children.length));});const f=$('#quickOrderForm');f.addEventListener('submit',e=>{e.preventDefault();if(f.dataset.saving==='1')return;const fd=new FormData(f),c=chemistById(fd.get('chemistId')),d=distributorById(fd.get('distributorId')),items=collectOrderItems(wrap),total=items.reduce((n,x)=>n+x.value,0);if(!c||!d||!items.length){toast('Select chemist, distributor and product.');return;}f.dataset.saving='1';const sb=$('button[type="submit"]',f);if(sb){sb.disabled=true;sb.textContent='Saving…';}const date=localISODateTime(),order={id:uid('ord'),date,planningDate:clean(fd.get('planningDate'))||localISODate(),chemistId:c.id,chemistName:c.name,distributorId:d.id,distributorName:d.name,items,totalValue:total,status:'accepted',fulfilmentStatus:'pending',notes:clean(fd.get('notes')),createdAt:new Date().toISOString()};state.orders.push(order);state.visits.push({id:uid('log'),date,entityType:'chemist',entityId:c.id,entityName:c.name,chemistId:c.id,chemistName:c.name,calls:0,inputs:0,basket:0,towel:0,conversation:0,newAvailability:0,pobValue:total,notes:`Accepted POB order to ${d.name}${order.notes?`: ${order.notes}`:''}`,productStatuses:{},orderId:order.id,createdAt:new Date().toISOString()});c.linkedDistributorId=d.id;c.distributorName=d.name;c.lastVisit=localISODate();d.lastOrderDate=localISODate();saveState();closeSheet();toast('Order accepted. Distributor added to planning.');});
 }
 function viewOrder(id){
   const o=state.orders.find(x=>x.id===id);if(!o)return;const d=distributorById(o.distributorId),pending=orderNeedsDistributorVisit(o),map=d?entityMapUrl(d):'';
@@ -1252,21 +1326,22 @@ function viewOrder(id){
   $('#deleteOrderBtn').addEventListener('click',()=>{if(!confirm('Delete order and its POB activity?'))return;state.orders=state.orders.filter(x=>x.id!==id);state.visits=state.visits.filter(v=>v.orderId!==id);saveState();closeSheet();});
 }
 function planTodayRoute(){
-  const eligible=state.doctors.filter(d=>todaySlot(d)&&num(d.latitude)&&num(d.longitude)),distributorStops=pendingDistributorStops(),preferred=smartPatchCandidates(30).find(x=>eligible.some(d=>d.id===x.doctor.id))?.doctor||eligible[0]||null;
-  openSheet('Today location-wise planning','Strict nearest-chain mode: selected start → nearest next stop → nearest from that stop. Timing conflicts are warnings only.',`${eligible.length?`<label class="sheet-form"><span>Start from saved doctor / hospital</span><select id="routeStartDoctor">${eligible.map(d=>`<option value="${esc(d.id)}" ${d.id===preferred?.id?'selected':''}>${esc(doctorDisplayName(d))}</option>`).join('')}</select></label><label class="toggle-line"><input id="includeVisitedRoute" type="checkbox"> Include doctors already called today</label><div id="routeResult"></div>`:empty('No doctor has both today timing and verified hospital GPS. Distributor planning is still shown below.')}<div id="distributorPlanResult"></div>`);
-  const renderDistributors=()=>{$('#distributorPlanResult').innerHTML=`<div class="detail-section"><h4>Accepted-order distributor stops</h4>${distributorStops.length?distributorStops.map((x,i)=>`<div class="route-stop ${x.mapReady?'':'route-risk'}"><span>${i+1}</span><div><strong>${esc(x.distributor.name)}</strong><small>${esc(`₹${x.totalValue.toLocaleString('en-IN')} • ${x.orders.length} order(s) • ${x.chemists.join(', ')||'Chemist pending'} • ${x.address||'Address missing'}${x.mapReady?' • map pin ready':' • add map pin in Distributor'}`)}</small></div>${entityMapUrl(x.distributor)?`<a class="btn secondary compact" href="${entityMapUrl(x.distributor)}" target="_blank" rel="noopener">Map</a>`:''}</div>`).join(''):empty('No accepted order is pending fulfilment.')}</div>`;};
-  renderDistributors();if(!eligible.length)return;
-  const render=()=>{const startDoctor=doctorById($('#routeStartDoctor').value)||preferred;if(!startDoctor)return;const lat=num(startDoctor.latitude),lng=num(startDoctor.longitude),route=groupedHospitalRouteCandidates(lat,lng,$('#includeVisitedRoute').checked),mappedDistributors=distributorStops.filter(x=>x.mapReady).map(x=>({type:'distributor',latitude:x.latitude,longitude:x.longitude,distributor:x.distributor})),url=googleRouteUrl(lat,lng,[...route,...mappedDistributors]);$('#routeResult').innerHTML=route.length?`<div class="notice">Start: ${esc(doctorDisplayName(startDoctor))}. Order is built as a true chain from each previous stop; same-hospital doctors are combined. Timing conflicts are shown but do not jump over a nearer stop.</div><div class="route-list">${route.map((x,i)=>`<div class="route-stop ${x.timingRisk?'route-risk':''}"><span>${i+1}</span><div><strong>${esc(x.hospital)}</strong><small>${esc(`${x.doctors.map(y=>doctorDisplayName(y.doctor)).join(', ')} • ETA ${minuteLabel(x.arrivalMinutes)} • ${x.distance.toFixed(1)} km approximate • ${x.waitMinutes?`wait ${x.waitMinutes} min • `:''}${x.timingRisk?`timing conflict +${x.lateMinutes} min • `:''}verified hospital pin`)}</small></div><button data-action="log-record" data-type="doctor" data-id="${x.doctor.id}">Meet</button></div>`).join('')}</div><div class="button-row">${url?`<a class="btn primary" href="${url}" target="_blank" rel="noopener">Open doctors + mapped distributors in Maps</a>`:''}<button id="saveRoutePlanBtn" class="btn secondary">Save plan</button></div>`:empty('No unvisited doctor is available with today timing and verified hospital GPS.');$('#saveRoutePlanBtn')?.addEventListener('click',()=>{state.routePlans.push({id:uid('route'),date:localISODate(),createdAt:new Date().toISOString(),startDoctorId:startDoctor.id,startDoctorName:doctorDisplayName(startDoctor),startLatitude:lat,startLongitude:lng,source:'Strict nearest-chain verified hospital GPS + accepted distributor orders',stops:[...route.map((x,i)=>({order:i+1,type:'Hospital',doctorId:x.doctor.id,doctorName:x.doctors.map(y=>y.doctor.name).join('; '),hospital:x.hospital,meetingFrom:x.slot.from,meetingTo:x.slot.to,estimatedArrival:minuteLabel(x.arrivalMinutes),travelMinutes:x.travelMinutes,waitMinutes:x.waitMinutes,timingRisk:x.timingRisk?'Yes':'No',locationAccuracy:x.doctor.locationAccuracy||'',locationSource:x.doctor.locationSource||'Verified hospital GPS',latitude:x.latitude,longitude:x.longitude,distanceKm:Number(x.distance.toFixed(2))})),...distributorStops.map((x,i)=>({order:route.length+i+1,type:'Distributor',doctorName:'',hospital:x.distributor.name,meetingFrom:'',meetingTo:'',estimatedArrival:'Flexible',travelMinutes:'',waitMinutes:'',timingRisk:x.mapReady?'No':'Map pin missing',locationAccuracy:'',locationSource:x.mapReady?'Manual verified map pin':'Address only',latitude:x.latitude||'',longitude:x.longitude||'',distanceKm:''}))]});saveState(false);toast('Doctor and distributor plan added to Excel.');});};
-  $('#routeStartDoctor').addEventListener('change',render);$('#includeVisitedRoute').addEventListener('change',render);render();
+  const eligible=state.doctors.filter(d=>todaySlot(d)&&num(d.latitude)&&num(d.longitude)&&doctorEligibility(d).eligible),distributorStops=pendingDistributorStops();
+  openSheet('Today dynamic patch','Current phone GPS → strict nearest eligible hospital chain. Meeting timing is shown as a warning; it does not silently reorder a farther stop. No Maps API is required.',`<div class="location-card"><div class="location-head"><div><strong>Planning start</strong><small id="routeLocationStatus" class="location-status loading">Fetching current GPS…</small></div><button type="button" id="routeFetchLocation" class="btn secondary compact">Refresh GPS</button></div><a id="routeLocationMap" class="hidden" target="_blank" rel="noopener">View current point</a><input id="routeLatitude" type="hidden"><input id="routeLongitude" type="hidden"><input id="routeAccuracy" type="hidden"><input id="routeCapturedAt" type="hidden"></div><label class="toggle-line"><input id="includeVisitedRoute" type="checkbox"> Include doctors already attempted today</label><div id="routeResult">${eligible.length?empty('Waiting for current GPS…'):empty('No eligible doctor has both today timing and saved GPS.')}</div><div id="distributorPlanResult"></div>`);
+  const renderDistributors=()=>{$('#distributorPlanResult').innerHTML=`<div class="detail-section"><h4>Accepted-order distributor stops</h4>${distributorStops.length?distributorStops.map((x,i)=>`<div class="route-stop ${x.mapReady?'':'route-risk'}"><span>${i+1}</span><div><strong>${esc(x.distributor.name)}</strong><small>${esc(`₹${x.totalValue.toLocaleString('en-IN')} • ${x.orders.length} order(s) • ${x.chemists.join(', ')||'Chemist pending'} • ${x.address||'Address missing'}${x.mapReady?' • GPS ready':' • GPS missing'}`)}</small></div></div>`).join(''):empty('No accepted order is pending fulfilment.')}</div>`;};
+  const render=()=>{let lat=num($('#routeLatitude').value),lng=num($('#routeLongitude').value),source='phone GPS';if(!lat||!lng){const anchor=latestPlanningAnchor();if(anchor){lat=anchor.lat;lng=anchor.lng;source=anchor.source;}else return;}const route=groupedHospitalRouteCandidates(lat,lng,$('#includeVisitedRoute').checked);$('#routeResult').innerHTML=route.length?`<div class="notice">Start: ${esc(source)}. ${route.length} eligible stop(s). Doctors already at 2/2 this month or inside the 15-day successful-visit lock are excluded automatically.</div><div class="route-list">${route.map((x,i)=>`<div class="route-stop ${x.timingRisk?'route-risk':''}"><span>${i+1}</span><div><strong>${esc(x.hospital)}</strong><small>${esc(`${x.doctors.map(y=>doctorDisplayName(y.doctor)).join(', ')} • ETA ${minuteLabel(x.arrivalMinutes)} • ${x.distance.toFixed(1)} km straight-line • ${x.waitMinutes?`wait ${x.waitMinutes} min • `:''}${x.timingRisk?`timing risk +${x.lateMinutes} min • `:''}${doctorEligibility(x.doctor).reason}`)}</small></div><button data-action="log-record" data-type="doctor" data-id="${x.doctor.id}">Meet</button></div>`).join('')}</div><button id="saveRoutePlanBtn" class="btn primary full">Save dynamic patch</button>`:empty('No remaining eligible doctor is available with today timing and saved GPS.');$('#saveRoutePlanBtn')?.addEventListener('click',()=>{state.routePlans.push({id:uid('route'),date:localISODate(),createdAt:new Date().toISOString(),startDoctorId:'',startDoctorName:source,startLatitude:lat,startLongitude:lng,source:'Current GPS + strict nearest saved doctor GPS + 15-day/2-visit eligibility + timing warnings',stops:[...route.map((x,i)=>({order:i+1,type:'Hospital',doctorId:x.doctor.id,doctorName:x.doctors.map(y=>y.doctor.name).join('; '),hospital:x.hospital,meetingFrom:x.slot.from,meetingTo:x.slot.to,estimatedArrival:minuteLabel(x.arrivalMinutes),travelMinutes:x.travelMinutes,waitMinutes:x.waitMinutes,timingRisk:x.timingRisk?'Yes':'No',locationAccuracy:x.doctor.locationAccuracy||'',locationSource:x.doctor.locationSource||'Saved doctor GPS',latitude:x.latitude,longitude:x.longitude,distanceKm:Number(x.distance.toFixed(2))})),...distributorStops.map((x,i)=>({order:route.length+i+1,type:'Distributor',doctorName:'',hospital:x.distributor.name,meetingFrom:'',meetingTo:'',estimatedArrival:'Flexible',travelMinutes:'',waitMinutes:'',timingRisk:x.mapReady?'No':'GPS missing',locationAccuracy:'',locationSource:x.mapReady?'Saved distributor GPS':'Address only',latitude:x.latitude||'',longitude:x.longitude||'',distanceKm:''}))]});saveState(false);toast('Dynamic patch saved.');});};
+  renderDistributors();$('#includeVisitedRoute').addEventListener('change',render);document.addEventListener('mr-location-ready',e=>{if(e.detail.prefix==='route')render();},{once:true});setupLocationCapture('route',true);setTimeout(()=>{if(!num($('#routeLatitude')?.value)||!num($('#routeLongitude')?.value))render();},1300);
 }
+
 function workbookData(){
   const latestRoute=state.routePlans.filter(r=>r.date===localISODate()).slice(-1)[0];
   return {sheets:[
-    {name:'Summary',rows:[['MR Machine Intelligence Export',localISODateTime()],['HQ',state.profile.hq],['TM',state.profile.tmName],['Doctors',state.doctors.length],['Chemists',state.chemists.length],['Distributors',state.distributors.length],['Orders',state.orders.length],['Voice Captures',state.captures.length],['Active Schemes',state.schemes.filter(x=>schemeState(x)==='active').length],[],['Metric','Today','Month Cumulative'],...METRICS.map(([k,l])=>[l,statsForDay()[k],statsForMonth()[k]])]},
+    {name:'Summary',rows:[['MR FieldFlow Export',localISODateTime()],['HQ',state.profile.hq],['TM',state.profile.tmName],['Doctors',state.doctors.length],['Chemists',state.chemists.length],['Distributors',state.distributors.length],['Orders',state.orders.length],['Expenses',state.expenses.length],['Voice Captures',state.captures.length],['Active Schemes',state.schemes.filter(x=>schemeState(x)==='active').length],[],['Metric','Today','Month Cumulative'],...METRICS.map(([k,l])=>[l,statsForDay()[k],statsForMonth()[k]])]},
     {name:'Doctors',rows:[['Doctor Name','Hospital / Clinic','Google Place ID','Hospital Opening Hours','Under Chemist','Meeting Days','Meeting From 1','Meeting To 1','Meeting From 2','Meeting To 2','Address','Area','Latitude','Longitude','Location Source','Last Meeting','Next Follow-up','Notes'],...state.doctors.map(d=>[d.name,doctorHospital(d),d.placeId||'',(d.hospitalOpeningHours||[]).join('; '),linkedChemist(d)?.name||d.chemistName,normalizeMeetingDays(d.meetingDays).map(x=>DAY_NAMES[x]).join('; '),d.meetingFrom,d.meetingTo,d.meetingFrom2,d.meetingTo2,d.address,d.area,d.latitude,d.longitude,d.locationSource||'',d.lastVisit,d.nextFollowUp,d.notes])]},
     {name:'Chemists',rows:[['Chemist Name','Preferred Distributor','Address','Area','Latitude','Longitude','Last Meeting','Next Follow-up','Notes'],...state.chemists.map(c=>[c.name,preferredDistributor(c)?.name||c.distributorName,c.address,c.area,c.latitude,c.longitude,c.lastVisit,c.nextFollowUp,c.notes])]},
     {name:'Distributors',rows:[['Distributor Name','Mobile','Address','Area','Latitude','Longitude','Last Order','Notes'],...state.distributors.map(d=>[d.name,d.mobile,d.address,d.area,d.latitude,d.longitude,d.lastOrderDate,d.notes])]},
     {name:'Orders',rows:[['Date','Doctor','Hospital','Chemist','Distributor','Products','Packs','Quantities','Schemes','POB Value','Status','Notes','Latitude','Longitude'],...state.orders.map(o=>[o.date,o.doctorName,o.doctorHospital,o.chemistName,distributorById(o.distributorId)?.name||o.distributorName,(o.items||[]).map(x=>x.product).join('; '),(o.items||[]).map(x=>x.pack).join('; '),(o.items||[]).map(x=>x.qty).join('; '),(o.items||[]).map(x=>x.schemeRatio).join('; '),orderTotal(o),o.status,o.notes,o.latitude,o.longitude])]},
+    {name:'Expenses',rows:[['Date','Type','Amount','From','To','Notes'],...state.expenses.map(x=>[x.date,x.type,x.amount,x.from,x.to,x.notes])]},
     {name:'Visits',rows:[['Date','Doctor','Hospital','Chemist','Result','Not-met Reason','Rescheduled For','Replacement Doctor','Machine Action','Calls','POB Value','Product Feedback','Follow-up','Notes','Visit Latitude','Visit Longitude','GPS Accuracy','Hospital Latitude','Hospital Longitude','Distance from Hospital (m)','Location Audit'],...state.visits.filter(v=>v.doctorId||v.chemistId).map(v=>{const a=locationAuditForVisit(v);return [v.date,v.doctorName,v.doctorHospital,v.chemistName,v.outcomeLabel||OUTCOME_LABELS[v.outcome]||'Doctor met',v.notMetReason||'',v.rescheduledFor||'',v.replacementDoctorName||'',v.intelligenceAction||'',v.calls,v.pobValue,Object.entries(v.productStatuses||{}).map(([p,x])=>`${p}: ${statusLabel(x)}`).join('; '),v.followUpDate,v.notes,v.latitude,v.longitude,v.locationAccuracy,v.hospitalLatitude||doctorById(v.doctorId)?.latitude||'',v.hospitalLongitude||doctorById(v.doctorId)?.longitude||'',a.distanceMeters,a.status];})]},
     {name:'Location Audit',rows:[['Date','Doctor','Hospital','Visit GPS','Hospital Master GPS','Distance (m)','GPS Accuracy (m)','Audit Status'],...state.visits.filter(v=>v.doctorId).map(v=>{const d=doctorById(v.doctorId),a=locationAuditForVisit(v);return [v.date,v.doctorName,v.doctorHospital,[v.latitude,v.longitude].filter(Boolean).join(', '),[v.hospitalLatitude||d?.latitude,v.hospitalLongitude||d?.longitude].filter(Boolean).join(', '),a.distanceMeters,a.accuracyMeters,a.status];})]},
     {name:'Schemes',rows:[['Product','Pack','Scheme / Offer','Start Date','End Date','Current Status','Source','Notes'],...state.schemes.map(x=>[x.product,x.pack,x.ratio,x.startDate,x.endDate,schemeState(x),x.source,x.notes])]},
@@ -1380,19 +1455,6 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
     try{for(const file of files){if(file.name.toLowerCase().endsWith('.json')){restoreObject(JSON.parse(await file.text()));continue;}const r=window.AndroidBridge?.parseSpreadsheet?await importThroughAndroid(file):await importArrayBuffer(await file.arrayBuffer(),file.name);Object.keys(grand).forEach(k=>grand[k]+=num(r[k]));state.imports.push({id:uid('imp'),file:file.name,date:new Date().toISOString(),summary:resultSummary(r)});}saveState();status.textContent=`Done: ${resultSummary(grand)} Old meetings and saved GPS were preserved.`;toast('Import complete.');}catch(err){status.className='notice error';status.textContent=`Import failed: ${err.message}`;}
   }
   function loadEmbeddedSeed(){if(state.settings.embeddedSeedLoaded||!window.MR_SEED_DATA)return;const seed=window.MR_SEED_DATA;let da=0,du=0,ca=0,cu=0,pc=0;(seed.chemists||[]).forEach(r=>{const m=upsertChemist(r);m.mode==='added'?ca++:cu++;});(seed.doctors||[]).forEach(r=>{const m=upsertDoctor(r);m.mode==='added'?da++:du++;});(seed.products||[]).forEach(r=>{if(upsertProduct(r.name,r.pts))pc++;});state.settings.embeddedSeedLoaded=true;state.imports.push({id:uid('imp'),file:'Embedded supplied data',date:new Date().toISOString(),summary:`${da} doctors, ${ca} chemists/stockists and ${pc} products loaded.`});saveState(false);}
-  async function loadBundledFiles(auto=false){const status=$('#importStatus');status.className='notice';status.classList.remove('hidden');status.textContent='Loading supplied Excel files…';if(!window.XLSX){status.className='notice error';status.textContent='Excel engine unavailable. Reopen the app.';return;}let total={doctorAdded:0,doctorUpdated:0,chemistAdded:0,chemistUpdated:0,distributorAdded:0,distributorUpdated:0,products:0,linked:0,skipped:0,sheets:0},ok=0;for(const path of BUNDLED_FILES){try{const res=await fetch(path);if(!res.ok)throw new Error(String(res.status));const r=await importArrayBuffer(await res.arrayBuffer(),decodeURIComponent(path.split('/').pop()));Object.keys(total).forEach(k=>total[k]+=num(r[k]));ok++;}catch(e){console.warn('Bundled import skipped',path,e);}}state.settings.bundledImportAttempted=true;if(ok){state.imports.push({id:uid('imp'),file:`${ok} supplied files`,date:new Date().toISOString(),summary:resultSummary(total)});saveState();status.textContent=`Supplied files loaded: ${resultSummary(total)}`;if(!auto)toast('Supplied data loaded.');}else{saveState(false);status.className='notice error';status.textContent='Could not read bundled files. Start through the included Termux server.';}}
-
-  function haptic(kind='light'){try{if(window.AndroidBridge?.haptic)window.AndroidBridge.haptic(kind);}catch(_){}}
-
-  const SAN_SPECIALTIES=['CONPHY','DIET','GENPHY','GPHY','GYNAEC','MATRON','PED'];
-  const SAN_CLASSES=['PRESCR','DISPEN'];
-  const SAN_BRAND_PATTERN=/\b(?:MUM[ -]?MUM|HUMYL|ZEFRICH|ZIORAL|CALYUMM|SIMYL|R5\s*IMMUNITY|LBW|MCT|IMMUNITY\s*DRINK)\b/i;
-  const SAN_HOSPITAL_PATTERN=/\b(?:hospital|hosp\b|clinic|nursing\s*home|maternity|medical\s*hospital|health\s*care|healthcare|children|child\s*care|neonatal|women(?:'s|s)?|ivf|dispensary|sonography|centre|center)\b/i;
-  const SAN_ADDRESS_PATTERN=/\b(?:road|rd\b|street|st\b|floor|flr\b|opp\b|opposite|near|nr\b|behind|b\/h|beside|cross\s*road|char\s*rasta|complex|mall|arcade|apartment|appt|society|bungalow|chambers|plaza|avenue|circle|nagar|gam\b|village|highway|no\.?\s*\d|\d+(?:st|nd|rd|th)?\s*floor)\b/i;
-  function isSanBulkDoctorText(text){
-    const source=String(text||'');
-    return /Listed Doctor Details\s*\(Rep:/i.test(source)&&/FieldForce Name/i.test(source)&&/Doctor Name/i.test(source)&&/Speciality/i.test(source);
-  }
   function sanTokens(value){
     return String(value||'').replace(/\r/g,'\n').split(/\n|\t/).map(x=>clean(x.replace(/^\*\*|\*\*$/g,''))).filter(Boolean);
   }
@@ -1544,24 +1606,13 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
       return;
     }
     const parsed=parseVoiceDetails(text);
-    openSheet('Review SAN copied details','Nothing is saved until you confirm. Detected values can be checked in one place.',`<div id="sanDetectedSummary">${sanDetectedHtml(parsed)}</div><label class="field-block"><span class="field-caption">Copied SAN text</span><textarea id="sanClipboardText" rows="7">${esc(text)}</textarea></label><div class="button-row"><button id="sanReparseBtn" class="btn secondary">Re-detect details</button><button id="sanSaveInboxBtn" class="btn secondary">Save to capture inbox</button></div><button id="sanUseMeetingBtn" class="btn primary full">Use these details in Log Meeting</button><div class="notice">Single-doctor flow: SAN me text select → Copy → MR bubble → Paste clipboard → Send to MR → Review → Log Meeting.</div>`);
+    openSheet('Review SAN copied details','Nothing is saved until you confirm. Detected values can be checked in one place.',`<div id="sanDetectedSummary">${sanDetectedHtml(parsed)}</div><label class="field-block"><span class="field-caption">Copied SAN text</span><textarea id="sanClipboardText" rows="7">${esc(text)}</textarea></label><div class="button-row"><button id="sanReparseBtn" class="btn secondary">Re-detect details</button><button id="sanSaveInboxBtn" class="btn secondary">Save to capture inbox</button></div><button id="sanUseMeetingBtn" class="btn primary full">Use these details in Log Meeting</button><div class="notice">Single-doctor flow: SAN text Copy → return to MR → paste clipboard → Review → Log Meeting.</div>`);
     const raw=()=>clean($('#sanClipboardText').value);
     $('#sanReparseBtn').addEventListener('click',()=>{$('#sanDetectedSummary').innerHTML=sanDetectedHtml(parseVoiceDetails(raw()));haptic();});
-    $('#sanSaveInboxBtn').addEventListener('click',()=>{const value=raw(),details=parseVoiceDetails(value);if(!value){toast('Paste text first.');return;}state.captures.push({id:uid('cap'),date:new Date().toISOString(),source:'SAN clipboard overlay',transcript:value,doctorId:details.doctorId||'',doctorName:details.doctorName||'',hospital:details.hospital||'',chemistId:details.chemistId||'',chemistName:details.chemistName||'',parsed:details,loggedMeeting:false});saveState();closeSheet();haptic('strong');toast('SAN details saved to capture inbox.');});
+    $('#sanSaveInboxBtn').addEventListener('click',()=>{const value=raw(),details=parseVoiceDetails(value);if(!value){toast('Paste text first.');return;}state.captures.push({id:uid('cap'),date:new Date().toISOString(),source:'SAN clipboard paste',transcript:value,doctorId:details.doctorId||'',doctorName:details.doctorName||'',hospital:details.hospital||'',chemistId:details.chemistId||'',chemistName:details.chemistName||'',parsed:details,loggedMeeting:false});saveState();closeSheet();haptic('strong');toast('SAN details saved to capture inbox.');});
     $('#sanUseMeetingBtn').addEventListener('click',()=>{const value=raw(),details=parseVoiceDetails(value);if(!value){toast('Paste text first.');return;}pendingSanClipboardText=value;closeSheet();haptic('strong');setTimeout(()=>quickMeeting(details.doctorId||'',details.chemistId||''),100);});
   }
 
-  window.__mrSanOverlayText=text=>setTimeout(()=>openSanClipboardReview(text),80);
-
-  function openSanOverlayManager(){
-    if(!window.AndroidBridge?.isNativeApp){openSheet('SAN copy overlay','Android APK required','<div class="note-box">Floating overlay is available only inside the Android APK.</div>');return;}
-    const allowed=Boolean(window.AndroidBridge.canDrawOverlays?.()),running=Boolean(window.AndroidBridge.isSanOverlayRunning?.());
-    openSheet('SAN copy overlay','Copy selected details from SAN and transfer them into the MR review screen.',`<div class="overlay-status-card ${running?'running':''}"><span>${running?'●':'○'}</span><div><strong>${running?'Overlay active':'Overlay stopped'}</strong><small>${allowed?'Display-over-apps permission allowed':'Permission required once'}</small></div></div><div class="san-flow"><div><b>1</b><span>SAN me required doctor / hospital / chemist details select karke Copy.</span></div><div><b>2</b><span>Floating MR bubble tap karo and Paste clipboard.</span></div><div><b>3</b><span>Send to MR, detected details review karo, then meeting me fill.</span></div></div><div class="button-row"><button id="sanPermissionBtn" class="btn secondary">${allowed?'Permission settings':'Allow overlay'}</button><button id="sanStartOverlayBtn" class="btn primary">Start overlay</button><button id="sanStopOverlayBtn" class="btn danger">Stop</button></div><button id="sanPasteNowBtn" class="btn secondary full">Paste current clipboard directly in app</button><div class="notice">Overlay only reads clipboard when you tap Paste. Android may show a clipboard-access message. Some protected apps can block overlays; in that case use Copy, return to MR, and tap Paste current clipboard.</div>`);
-    $('#sanPermissionBtn').addEventListener('click',()=>window.AndroidBridge.requestSanOverlayPermission?.());
-    $('#sanStartOverlayBtn').addEventListener('click',()=>{window.AndroidBridge.startSanOverlay?.();haptic('strong');setTimeout(closeSheet,250);});
-    $('#sanStopOverlayBtn').addEventListener('click',()=>{window.AndroidBridge.stopSanOverlay?.();haptic();closeSheet();});
-    $('#sanPasteNowBtn').addEventListener('click',()=>{const text=clean(window.AndroidBridge.readClipboardText?.()||'');if(!text){toast('Clipboard is empty or unavailable. Copy details in SAN first.');return;}closeSheet();openSanClipboardReview(text);});
-  }
 
   function restoreObject(obj){if(!obj||!Array.isArray(obj.doctors)||!Array.isArray(obj.chemists)||!Array.isArray(obj.visits))throw new Error('Not a valid MR Machine backup.');state=migrateState(obj);}
   function download(name,content,type='application/json'){if(window.AndroidBridge?.saveTextFile){window.AndroidBridge.saveTextFile(name,type,content);return;}const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
@@ -1575,22 +1626,22 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
       if(e.target.closest('button,.btn,[data-nav]'))haptic(e.target.closest('.primary,.danger,[type="submit"]')?'strong':'light');
       const nav=e.target.closest('[data-nav]');if(nav){navigate(nav.dataset.nav);return;}
       const close=e.target.closest('[data-close-sheet]');if(close){closeSheet();return;}
-      const a=e.target.closest('[data-action]');if(a){const action=a.dataset.action,type=a.dataset.type,id=a.dataset.id;if(action==='quick-log'||action==='add-visit')quickMeeting();if(action==='add-doctor')editRecord('doctor');if(action==='add-chemist')editRecord('chemist');if(action==='log-record'){if(type==='doctor')quickMeeting(id,'');else quickMeeting('',id);}if(action==='edit-record')editRecord(type,id);if(action==='view-record')viewRecord(type,id);if(action==='view-visit')viewVisit(id);if(action==='add-distributor')editDistributor();if(action==='edit-distributor')editDistributor(id);if(action==='manage-distributors')manageDistributors();if(action==='add-scheme')editScheme();if(action==='edit-scheme')editScheme(id);if(action==='manage-schemes')manageSchemes();if(action==='new-order')quickOrder(a.dataset.distributorId||'');if(action==='view-order')viewOrder(id);if(action==='plan-route')planTodayRoute();if(action==='nearby-hospitals')discoverNearbyHospitals();if(action==='voice-capture')voiceDataCapture();return;}
+      const a=e.target.closest('[data-action]');if(a){const action=a.dataset.action,type=a.dataset.type,id=a.dataset.id;if(action==='work-menu')openWorkMenu();if(action==='expense')quickExpense();if(action==='day-close')openDayClose();if(action==='quick-log'||action==='add-visit'){if(!$('#editorSheet').classList.contains('hidden'))closeSheet();setTimeout(()=>quickMeeting(),30);}if(action==='chemist-visit'){const cid=id||a.dataset.chemistId||'';if(!$('#editorSheet').classList.contains('hidden'))closeSheet();setTimeout(()=>quickChemistVisit(cid),30);}if(action==='add-doctor')editRecord('doctor');if(action==='add-chemist')editRecord('chemist');if(action==='log-record'){if(type==='doctor')quickMeeting(id,'');else quickMeeting('',id);}if(action==='edit-record')editRecord(type,id);if(action==='view-record')viewRecord(type,id);if(action==='view-visit')viewVisit(id);if(action==='add-distributor')editDistributor();if(action==='edit-distributor')editDistributor(id);if(action==='manage-distributors')manageDistributors();if(action==='add-scheme')editScheme();if(action==='edit-scheme')editScheme(id);if(action==='manage-schemes')manageSchemes();if(action==='new-order')quickOrder(a.dataset.distributorId||'');if(action==='view-order')viewOrder(id);if(action==='plan-route')planTodayRoute();if(action==='nearby-hospitals')discoverNearbyHospitals();if(action==='voice-capture')voiceDataCapture();return;}
       const dc=e.target.closest('[data-doctor-chip]');if(dc){doctorFilter=dc.dataset.doctorChip;renderDoctors();return;}
       const cc=e.target.closest('[data-chemist-chip]');if(cc){chemistFilter=cc.dataset.chemistChip;renderChemists();return;}
       const vf=e.target.closest('[data-visit-filter]');if(vf){visitFilter=vf.dataset.visitFilter;renderVisits();return;}
       if(e.target.closest('[data-filter-followups="due"]')){visitFilter='due';navigate('visits');}
     });
-    $('#sheetBackdrop').addEventListener('click',closeSheet);$('#quickLogBtn').addEventListener('click',()=>quickMeeting());$('#quickSearchBtn').addEventListener('click',globalSearch);
+    $('#sheetBackdrop').addEventListener('click',closeSheet);$('#quickLogBtn').addEventListener('click',openWorkMenu);$('#quickSearchBtn').addEventListener('click',globalSearch);
     $('#doctorSearch').addEventListener('input',renderDoctors);$('#chemistSearch').addEventListener('input',renderChemists);
     $('#doctorFilterBtn').addEventListener('click',()=>{doctorFilter=doctorFilter==='unlinked'?'all':'unlinked';renderDoctors();});
     $('#stockFilterBtn').addEventListener('click',()=>{chemistFilter=chemistFilter==='feedback'?'all':'feedback';renderChemists();});
     $('#workflowModeBtn').addEventListener('click',()=>{state.settings.workflowMode=state.settings.workflowMode==='collect'?'field':'collect';saveState();toast(state.settings.workflowMode==='collect'?'Data gathering mode active.':'Field work mode active.');});
-    $('#machineOpenBtn').addEventListener('click',openIntelligenceCenter);$('#companyReportPackBtn').addEventListener('click',exportCompanyReportPack);$('#sanOverlayBtn').addEventListener('click',openSanOverlayManager);
-    $('#nearbyHospitalBtn').addEventListener('click',discoverNearbyHospitals);$('#planRouteBtn').addEventListener('click',planTodayRoute);$('#newOrderBtn').addEventListener('click',()=>quickOrder());$('#manageDistributorsBtn').addEventListener('click',manageDistributors);$('#manageSchemesBtn').addEventListener('click',manageSchemes);$('#exportXlsxBtn').addEventListener('click',exportXLSX);
+    $('#machineOpenBtn').addEventListener('click',openIntelligenceCenter);$('#companyReportPackBtn').addEventListener('click',exportCompanyReportPack);
+    $('#nearbyHospitalBtn')?.addEventListener('click',discoverNearbyHospitals);$('#planRouteBtn')?.addEventListener('click',planTodayRoute);$('#newOrderBtn')?.addEventListener('click',()=>quickOrder());$('#manageDistributorsBtn').addEventListener('click',manageDistributors);$('#manageSchemesBtn').addEventListener('click',manageSchemes);$('#exportXlsxBtn').addEventListener('click',exportXLSX);
     $('#copyReportBtn').addEventListener('click',async()=>{try{const text=getReportText();if(window.AndroidBridge?.copyText)window.AndroidBridge.copyText(text);else await navigator.clipboard.writeText(text);toast('Daily report copied.');}catch(_){toast('Copy failed. Use Share.');}});
     $('#shareReportBtn').addEventListener('click',async()=>{const text=getReportText();try{if(window.AndroidBridge?.shareText)window.AndroidBridge.shareText('MR Daily Report',text);else if(navigator.share)await navigator.share({title:'MR Daily Report',text});else window.open(`https://wa.me/?text=${encodeURIComponent(text)}`,'_blank');}catch(e){if(e.name!=='AbortError')toast('Share cancelled.');}});
-    $('#importFile').addEventListener('change',e=>{if(e.target.files.length)importFiles([...e.target.files]);e.target.value='';});$('#loadBundledBtn').addEventListener('click',()=>{if(window.AndroidBridge){const status=$('#importStatus');status.className='notice';status.classList.remove('hidden');status.textContent='The supplied doctor, chemist and product data is already included in this Android app.';toast('Starter data is already loaded.');}else loadBundledFiles(false);});
+    $('#importFile').addEventListener('change',e=>{if(e.target.files.length)importFiles([...e.target.files]);e.target.value='';});$('#loadBundledBtn').addEventListener('click',()=>{if(window.AndroidBridge){const status=$('#importStatus');status.className='notice';status.classList.remove('hidden');status.textContent='The supplied doctor, chemist and product data is already included in this Android app.';toast('Starter data is already loaded.');}else{const status=$('#importStatus');status.className='notice error';status.classList.remove('hidden');status.textContent='Bundled starter data is already embedded. Spreadsheet import requires the Android app parser.';}});
     $('#exportJsonBtn').addEventListener('click',()=>download(`MR-Daily-Auto-Backup-${localISODate()}.json`,JSON.stringify(state,null,2)));$('#exportCsvBtn').addEventListener('click',exportCSV);$('#restoreBtn').addEventListener('click',()=>$('#restoreInput').click());
     $('#restoreInput').addEventListener('change',async e=>{try{restoreObject(JSON.parse(await e.target.files[0].text()));saveState();toast('Backup restored.');}catch(err){toast(err.message);}e.target.value='';});
     $('#profileForm').addEventListener('submit',e=>{e.preventDefault();const fd=new FormData(e.currentTarget);['tmName','hq','joinWorkWith','companyDivision','products'].forEach(k=>state.profile[k]=clean(fd.get(k)));saveState();toast('Profile and product buttons saved.');});
@@ -1601,6 +1652,7 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
     window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstallPrompt=e;});$('#installBtn').addEventListener('click',async()=>{if(window.AndroidBridge){openSheet('Android app installed','Ready to use','<div class="note-box">This is already the native Android APK. Termux and Chrome installation are not required.</div>');}else if(deferredInstallPrompt){deferredInstallPrompt.prompt();await deferredInstallPrompt.userChoice;deferredInstallPrompt=null;}else openSheet('Install on Android','Chrome steps','<div class="note-box">Open Chrome menu (⋮) → Add to Home screen or Install app.</div>');});
   }
 
-  async function init(){loadEmbeddedSeed();bindEvents();renderAll();showLockIfNeeded();if(window.AndroidBridge?.consumeSanOverlayText){const pending=clean(window.AndroidBridge.consumeSanOverlayText());if(pending)setTimeout(()=>openSanClipboardReview(pending),500);}if('serviceWorker'in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./service-worker.js').catch(console.warn);if(!state.settings.bundledImportAttempted&&location.protocol!=='file:')setTimeout(()=>loadBundledFiles(true),900);}
+  async function init(){loadEmbeddedSeed();bindEvents();renderAll();
+    showLockIfNeeded();if('serviceWorker'in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./service-worker.js').catch(console.warn);}
   document.addEventListener('DOMContentLoaded',init);
 })();

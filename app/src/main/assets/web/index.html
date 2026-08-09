@@ -4,18 +4,18 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0a6c62" />
-  <meta name="description" content="Offline intelligent MR field app with smart patch, not-met rescheduling, doctor-hospital verification, product feedback, POB and company reports." />
+  <meta name="description" content="Offline MR field workflow for doctor calls, chemist visits, POB, follow-ups, route planning and reports." />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/icon-192.png" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="stylesheet" href="styles.css" />
-  <title>MR Machine Intelligence</title>
+  <title>MR FieldFlow</title>
 </head>
 <body>
   <div id="lockScreen" class="lock-screen hidden" aria-hidden="true">
     <div class="lock-card">
       <div class="brand-mark large">MR</div>
-      <h1>MR Machine Intelligence</h1>
+      <h1>MR FieldFlow</h1>
       <p>Enter your local app PIN</p>
       <input id="unlockPin" class="pin-input" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="••••" />
       <button id="unlockBtn" class="btn primary full">Unlock</button>
@@ -27,7 +27,7 @@
     <header class="topbar">
       <button class="brand-wrap plain-button" data-nav="dashboard" aria-label="Home">
         <div class="brand-mark">MR</div>
-        <div><strong>MR Machine</strong><small id="profileLine">Rajkot • Olakiya Vishal</small></div>
+        <div><strong>MR FieldFlow</strong><small id="profileLine">Rajkot • Olakiya Vishal</small></div>
       </button>
       <div class="top-actions">
         <button id="quickSearchBtn" class="icon-btn" aria-label="Search">⌕</button>
@@ -37,62 +37,76 @@
 
     <main class="main-content">
       <section class="page active" data-page="dashboard">
-        <div class="hero-card">
-          <div>
+        <div class="fieldflow-hero">
+          <div class="fieldflow-hero-copy">
             <span class="eyebrow" id="todayLabel">TODAY</span>
-            <h1 id="greeting">Field report ready</h1>
-            <p id="routeLabel">Search doctor, confirm hospital, pharmacy, timing and GPS, then save.</p>
+            <h1 id="greeting">Good morning</h1>
+            <p id="routeLabel">Your field work, one step at a time.</p>
           </div>
-          <button class="hero-add" data-action="quick-log" aria-label="Log activity">＋</button>
+          <div class="save-health" id="saveHealth"><span></span><small id="lastSavedStatus">Offline ready</small></div>
         </div>
 
-        <div class="collection-mode-card">
-          <div class="collection-head"><div><span class="eyebrow">WORKFLOW</span><h2 id="collectionModeTitle">Data gathering mode</h2></div><button id="workflowModeBtn" class="btn secondary compact">Switch to field work</button></div>
-          <p id="collectionModeText">Select the accurate doctor, then confirm hospital, pharmacy, meeting timing and GPS once.</p>
-          <div class="progress-track"><span id="collectionProgressBar"></span></div>
-          <small id="collectionProgressText">0% ready</small>
-          <div class="collection-actions"><button data-action="voice-capture">🎙 Voice capture</button><button data-action="add-doctor">+ Doctor</button><button data-action="add-chemist">+ Chemist</button><button data-action="add-distributor">+ Distributor</button></div>
+        <section class="start-work-card" aria-label="Start field work">
+          <div class="start-work-copy">
+            <small>PRIMARY ACTION</small>
+            <h2>Start next doctor call</h2>
+            <p>Search doctor → record result → product feedback → save. Master details stay in the background unless something changed.</p>
+          </div>
+          <button class="start-visit-btn" data-action="quick-log"><span>＋</span><strong>Doctor visit</strong><small>Fast field flow</small></button>
+          <div class="quick-work-grid">
+            <button data-action="chemist-visit"><span>Rx</span><strong>Chemist visit</strong><small>Availability / follow-up</small></button>
+            <button data-action="new-order"><span>₹</span><strong>POB order</strong><small>Send to distributor</small></button>
+            <button data-action="nearby-hospitals"><span>◎</span><strong>Nearby</strong><small>Saved hospital GPS</small></button>
+            <button data-action="plan-route"><span>⌖</span><strong>Route</strong><small>Plan remaining calls</small></button>
+            <button data-action="voice-capture"><span>🎙</span><strong>Voice capture</strong><small>Save field details</small></button>
+            <button data-action="expense"><span>₹</span><strong>Expense</strong><small>Travel / food / stay</small></button>
+          </div>
+        </section>
+
+        <div class="day-glance">
+          <button class="glance-card" data-nav="visits"><small>CALLS TODAY</small><strong id="todayVisitCount">0</strong><span>activity</span></button>
+          <button class="glance-card warning" data-filter-followups="due"><small>FOLLOW-UPS</small><strong id="dueCount">0</strong><span>due</span></button>
+          <button class="glance-card" data-action="new-order"><small>POB TODAY</small><strong id="todayOrderValue">₹0</strong><span id="todayOrderCount">0 orders</span></button>
+          <button class="glance-card" data-nav="doctors"><small>DOCTORS</small><strong id="doctorCount">0</strong><span><b id="chemistCount">0</b> chemists</span></button>
         </div>
 
-        <div class="machine-card">
-          <div class="machine-head"><div><span class="eyebrow">INTELLIGENCE</span><h2>MR Machine</h2><p id="machineQualityText">Reading doctor data…</p></div><button id="machineOpenBtn" class="btn primary compact">Open Machine</button></div>
+        <div class="machine-card fieldflow-machine">
+          <div class="machine-head"><div><span class="eyebrow">NEXT BEST CALLS</span><h2>Smart field queue</h2><p id="machineQualityText">Reading doctor data…</p></div><button id="machineOpenBtn" class="btn primary compact">View plan</button></div>
           <div id="machineTopList" class="machine-top-list"></div>
-          <small class="machine-footnote">Patch score uses doctor timing, follow-up, not-met history, product feedback and data quality. GPS is not used for attendance or background tracking.</small>
+          <small class="machine-footnote">The queue respects doctor timing, follow-ups, not-met history, product opportunity, monthly visit limits and your saved field data.</small>
         </div>
 
-        <div class="report-card">
-          <div class="section-head compact-head">
-            <div><h2>Daily report</h2><p id="reportPeriod">Today / August cumulative</p></div>
-            <span class="live-pill">AUTO</span>
-          </div>
-          <div id="reportKpis" class="report-kpis"></div>
-          <div class="report-actions">
-            <button id="copyReportBtn" class="btn secondary">Copy</button>
-            <button id="shareReportBtn" class="btn primary">Share / WhatsApp</button>
-          </div>
+        <div class="ops-strip">
+          <button data-action="nearby-hospitals"><span><small>GPS READY</small><strong id="nearbyReadyCount">0</strong></span><em>Nearby</em></button>
+          <button data-action="plan-route"><span><small>ROUTE READY</small><strong id="routeReadyCount">0</strong></span><em id="routeReadyText">Add timing + GPS</em></button>
         </div>
 
-        <div class="stats-grid">
-          <button class="stat-card" data-nav="doctors"><span class="stat-icon">⚕</span><strong id="doctorCount">0</strong><small>Doctors</small></button>
-          <button class="stat-card" data-nav="chemists"><span class="stat-icon">✚</span><strong id="chemistCount">0</strong><small>Chemists</small></button>
-          <button class="stat-card" data-nav="visits"><span class="stat-icon">✓</span><strong id="todayVisitCount">0</strong><small>Meetings today</small></button>
-          <button class="stat-card warning" data-filter-followups="due"><span class="stat-icon">◷</span><strong id="dueCount">0</strong><small>Due follow-ups</small></button>
-        </div>
+        <div class="section-head"><div><h2>What needs attention</h2><p>Follow-ups and unfinished field work</p></div><button class="text-btn" data-nav="visits">Activity</button></div>
+        <div id="nextActionsList" class="stack-list"></div>
 
-        <div class="field-tools-grid">
-          <div class="field-tool-card nearby-tool"><div><small>NEARBY HOSPITALS</small><strong id="nearbyReadyCount">GPS</strong><p>Find saved and live hospitals around you</p></div><button id="nearbyHospitalBtn" class="btn primary compact">Find nearby</button></div>
-          <div class="field-tool-card route-tool"><div><small>SAVED LOCATION ROUTE</small><strong id="routeReadyCount">0</strong><p id="routeReadyText">Verify hospital GPS and timing first</p></div><button id="planRouteBtn" class="btn primary compact">Plan saved route</button></div>
-          <div class="field-tool-card order-tool"><div><small>DISTRIBUTOR ORDERS</small><strong id="todayOrderCount">0</strong><p><span id="todayOrderValue">₹0</span> POB today</p></div><button id="newOrderBtn" class="btn primary compact">+ Order</button></div>
-        </div>
-
-        <div class="section-head"><div><h2>Today’s calls</h2><p>Recent doctor–chemist meetings with GPS</p></div><button class="text-btn" data-nav="visits">View all</button></div>
+        <div class="section-head"><div><h2>Today’s visits</h2><p>Your latest doctor and chemist activity</p></div><button class="text-btn" data-nav="visits">View all</button></div>
         <div id="todayActivityList" class="stack-list"></div>
 
-        <div class="section-head"><div><h2>Today’s distributor orders</h2><p>POB with product, scheme and distributor</p></div><button class="text-btn" id="newOrderBtn2" data-action="new-order">Add</button></div>
+        <div class="section-head"><div><h2>Today’s POB</h2><p>Orders waiting for distributor fulfilment</p></div><button class="text-btn" data-action="new-order">Add order</button></div>
         <div id="recentOrderList" class="stack-list"></div>
 
-        <div class="section-head"><div><h2>Follow-ups</h2><p>Commitments requiring action</p></div></div>
-        <div id="nextActionsList" class="stack-list"></div>
+        <details class="dashboard-disclosure report-disclosure">
+          <summary><span><strong>Daily report</strong><small id="reportPeriod">Today / month cumulative</small></span><span class="live-pill">AUTO</span></summary>
+          <div class="report-card embedded-report">
+            <div id="reportKpis" class="report-kpis"></div>
+            <div class="report-actions"><button id="copyReportBtn" class="btn secondary">Copy</button><button id="shareReportBtn" class="btn primary">Share / WhatsApp</button></div>
+          </div>
+        </details>
+
+        <details class="dashboard-disclosure setup-disclosure">
+          <summary><span><strong>Field setup & data readiness</strong><small>Only open when adding or correcting master data</small></span><span id="collectionProgressText">0% ready</span></summary>
+          <div class="collection-mode-card fieldflow-setup-card">
+            <div class="collection-head"><div><span class="eyebrow">SETUP MODE</span><h2 id="collectionModeTitle">Data gathering mode</h2></div><button id="workflowModeBtn" class="btn secondary compact">Switch to field work</button></div>
+            <p id="collectionModeText">Confirm doctor, hospital, chemist, timing and GPS once.</p>
+            <div class="progress-track"><span id="collectionProgressBar"></span></div>
+            <div class="collection-actions"><button data-action="add-doctor">+ Doctor</button><button data-action="add-chemist">+ Chemist</button><button data-action="add-distributor">+ Distributor</button><button data-nav="tools">Import / Backup</button></div>
+          </div>
+        </details>
       </section>
 
       <section class="page" data-page="doctors">
@@ -124,7 +138,8 @@
           <button class="settings-card action-card" data-action="nearby-hospitals"><span>◎</span><div><h3>Nearby hospital discovery</h3><p>Current GPS → hospital → doctor</p></div></button>
           <button class="settings-card action-card" data-action="plan-route"><span>⌖</span><div><h3>Saved hospital route</h3><p>Timing + verified hospital locations; no live GPS</p></div></button>
           <button class="settings-card action-card" data-action="new-order"><span>₹</span><div><h3>New POB order</h3><p>Chemist → distributor → products</p></div></button>
-          <button class="settings-card action-card san-overlay-card" id="sanOverlayBtn"><span>CP</span><div><h3>SAN copy overlay</h3><p>Copy in SAN → floating paste box → review in MR</p></div></button>
+          <button class="settings-card action-card" data-action="expense"><span>EX</span><div><h3>Field expense</h3><p>Travel, food, stay and other claims</p></div></button>
+          <button class="settings-card action-card" data-action="day-close"><span>✓</span><div><h3>Close day</h3><p>Calls, POB, expenses and pending follow-ups</p></div></button>
         </div>
 
         <div class="settings-card import-card">
@@ -174,12 +189,12 @@
       </section>
     </main>
 
-    <nav class="bottom-nav" aria-label="Primary">
-      <button class="active" data-nav="dashboard"><span>⌂</span><small>Home</small></button>
+    <nav class="bottom-nav fieldflow-nav" aria-label="Primary">
+      <button class="active" data-nav="dashboard"><span>⌂</span><small>Today</small></button>
       <button data-nav="doctors"><span>⚕</span><small>Doctors</small></button>
-      <button data-nav="chemists"><span>✚</span><small>Chemists</small></button>
+      <button class="nav-visit" data-action="quick-log" aria-label="Start doctor visit"><span>＋</span><small>Visit</small></button>
       <button data-nav="visits"><span>✓</span><small>Activity</small></button>
-      <button data-nav="tools"><span>⚙</span><small>Tools</small></button>
+      <button data-nav="tools"><span>•••</span><small>More</small></button>
     </nav>
   </div>
 

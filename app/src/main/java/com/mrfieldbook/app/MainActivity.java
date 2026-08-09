@@ -5,7 +5,6 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.content.pm.ApplicationInfo;
 import android.net.Uri;
 import android.location.Location;
 import android.location.LocationListener;
@@ -34,22 +33,12 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
 
-import com.google.android.gms.maps.model.LatLng;
-import com.google.android.libraries.places.api.Places;
-import com.google.android.libraries.places.api.model.CircularBounds;
-import com.google.android.libraries.places.api.model.OpeningHours;
-import com.google.android.libraries.places.api.model.Place;
-import com.google.android.libraries.places.api.net.PlacesClient;
-import com.google.android.libraries.places.api.net.SearchNearbyRequest;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
 
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 public final class MainActivity extends Activity {
@@ -74,8 +63,6 @@ public final class MainActivity extends Activity {
     private boolean keepListening;
     private boolean restartingSpeech;
     private String voicePrefix = "voice";
-    private PlacesClient placesClient;
-    private String placesInitError = "Google Places API key is not configured.";
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean webReady;
 
@@ -96,8 +83,10 @@ public final class MainActivity extends Activity {
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setSaveFormData(false);
+        settings.setAllowFileAccessFromFileURLs(false);
+        settings.setAllowUniversalAccessFromFileURLs(false);
 
-        initializePlacesClient();
 
         webView.addJavascriptInterface(new AndroidBridge(), "AndroidBridge");
         webView.setWebViewClient(new AppWebViewClient());
@@ -105,28 +94,6 @@ public final class MainActivity extends Activity {
         webView.loadUrl("file:///android_asset/web/index.html");
     }
 
-    @Override
-    protected void onResume() {
-        super.onResume();
-        mainHandler.postDelayed(this::deliverPendingSanText, 450L);
-    }
-
-    @Override
-    protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent);
-        setIntent(intent);
-        mainHandler.postDelayed(this::deliverPendingSanText, 350L);
-    }
-
-    private void deliverPendingSanText() {
-        if (!webReady || webView == null) return;
-        SharedPreferences prefs = getSharedPreferences(SanOverlayService.PREFS, MODE_PRIVATE);
-        String text = prefs.getString(SanOverlayService.KEY_PENDING_TEXT, "");
-        if (text == null || text.trim().isEmpty()) return;
-        prefs.edit().remove(SanOverlayService.KEY_PENDING_TEXT).apply();
-        String script = "if(window.__mrSanOverlayText){window.__mrSanOverlayText(" + JSONObject.quote(text) + ");}";
-        webView.evaluateJavascript(script, null);
-    }
 
     private String readClipboardText() {
         try {
@@ -161,11 +128,17 @@ public final class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) {
-            webView.goBack();
-        } else {
+        if (webView == null) {
             super.onBackPressed();
+            return;
         }
+        webView.evaluateJavascript(
+                "window.__mrHandleBack ? String(window.__mrHandleBack()) : 'false';",
+                value -> {
+                    boolean handled = "\"true\"".equals(value) || "true".equals(value);
+                    if (!handled) MainActivity.super.onBackPressed();
+                }
+        );
     }
 
     @Override
@@ -237,87 +210,6 @@ public final class MainActivity extends Activity {
             if (granted) startVoiceRecognition(voicePrefix);
             else sendVoiceEvent(voicePrefix, "error", "", false, "Microphone permission denied. Allow microphone access in app settings.");
         }
-    }
-
-    private void initializePlacesClient() {
-        try {
-            ApplicationInfo appInfo = getPackageManager().getApplicationInfo(getPackageName(), PackageManager.GET_META_DATA);
-            String apiKey = appInfo.metaData == null ? "" : appInfo.metaData.getString("com.google.android.geo.API_KEY", "");
-            if (apiKey == null || apiKey.trim().isEmpty() || "NO_KEY".equals(apiKey)) {
-                placesInitError = "Live search is not configured. Add the PLACES_API_KEY GitHub secret, then rebuild.";
-                return;
-            }
-            if (!Places.isInitialized()) Places.initializeWithNewPlacesApiEnabled(getApplicationContext(), apiKey.trim());
-            placesClient = Places.createClient(this);
-            placesInitError = "";
-        } catch (Exception error) {
-            placesClient = null;
-            placesInitError = error.getMessage() == null ? "Google Places could not start." : error.getMessage();
-        }
-    }
-
-    private void searchNearbyHospitals(String prefix, double latitude, double longitude, double radiusMeters) {
-        if (placesClient == null) {
-            sendNearbyPlaces(prefix, null, placesInitError);
-            return;
-        }
-        try {
-            double safeRadius = Math.max(100d, Math.min(50000d, radiusMeters));
-            List<Place.Field> fields = Arrays.asList(
-                    Place.Field.ID,
-                    Place.Field.DISPLAY_NAME,
-                    Place.Field.FORMATTED_ADDRESS,
-                    Place.Field.LOCATION,
-                    Place.Field.PRIMARY_TYPE,
-                    Place.Field.OPENING_HOURS
-            );
-            CircularBounds circle = CircularBounds.newInstance(new LatLng(latitude, longitude), safeRadius);
-            SearchNearbyRequest request = SearchNearbyRequest.builder(circle, fields)
-                    .setIncludedTypes(Arrays.asList("hospital", "medical_clinic", "doctor"))
-                    .setMaxResultCount(20)
-                    .setRankPreference(SearchNearbyRequest.RankPreference.DISTANCE)
-                    .setRegionCode("IN")
-                    .build();
-            placesClient.searchNearby(request)
-                    .addOnSuccessListener(response -> sendNearbyPlaces(prefix, response.getPlaces(), null))
-                    .addOnFailureListener(error -> sendNearbyPlaces(prefix, null,
-                            error.getMessage() == null ? "Nearby hospital search failed." : error.getMessage()));
-        } catch (Exception error) {
-            sendNearbyPlaces(prefix, null, error.getMessage() == null ? "Nearby hospital search failed." : error.getMessage());
-        }
-    }
-
-    private void sendNearbyPlaces(String prefix, List<Place> places, String error) {
-        JSONArray rows = new JSONArray();
-        if (places != null) {
-            for (Place place : places) {
-                try {
-                    JSONObject row = new JSONObject();
-                    row.put("placeId", place.getId() == null ? "" : place.getId());
-                    row.put("name", place.getDisplayName() == null ? "Hospital / clinic" : place.getDisplayName());
-                    row.put("address", place.getFormattedAddress() == null ? "" : place.getFormattedAddress());
-                    row.put("primaryType", place.getPrimaryType() == null ? "" : place.getPrimaryType());
-                    LatLng location = place.getLocation();
-                    if (location != null) {
-                        row.put("latitude", location.latitude);
-                        row.put("longitude", location.longitude);
-                    }
-                    JSONArray hours = new JSONArray();
-                    OpeningHours openingHours = place.getOpeningHours();
-                    if (openingHours != null && openingHours.getWeekdayText() != null) {
-                        for (String line : openingHours.getWeekdayText()) hours.put(line);
-                    }
-                    row.put("openingHours", hours);
-                    rows.put(row);
-                } catch (Exception ignored) {}
-            }
-        }
-        String script = "window.__mrNearbyPlaces(" +
-                JSONObject.quote(prefix == null ? "nearby" : prefix) + "," +
-                (error == null ? "true" : "false") + "," +
-                JSONObject.quote(rows.toString()) + "," +
-                JSONObject.quote(error == null ? "" : error) + ");";
-        runOnUiThread(() -> webView.evaluateJavascript(script, null));
     }
 
     private void requestNativeLocation(String prefix) {
@@ -519,12 +411,48 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        // FieldFlow does not start GPS automatically. Location is fetched only after an explicit field action.
+    }
+
+    @Override
+    protected void onPause() {
+        keepListening = false;
+        restartingSpeech = false;
+        if (speechRecognizer != null) {
+            try { speechRecognizer.cancel(); } catch (Exception ignored) {}
+        }
+        if (locationManager != null && activeLocationListener != null) {
+            try { locationManager.removeUpdates(activeLocationListener); } catch (Exception ignored) {}
+            activeLocationListener = null;
+        }
+        super.onPause();
+    }
+
+    @Override
     protected void onDestroy() {
         keepListening = false;
+        mainHandler.removeCallbacksAndMessages(null);
+        if (locationManager != null && activeLocationListener != null) {
+            try { locationManager.removeUpdates(activeLocationListener); } catch (Exception ignored) {}
+            activeLocationListener = null;
+        }
         if (speechRecognizer != null) {
             try { speechRecognizer.cancel(); } catch (Exception ignored) {}
             speechRecognizer.destroy();
             speechRecognizer = null;
+        }
+        if (webView != null) {
+            try {
+                webView.removeJavascriptInterface("AndroidBridge");
+                webView.stopLoading();
+                webView.loadUrl("about:blank");
+                webView.clearHistory();
+                webView.removeAllViews();
+                webView.destroy();
+            } catch (Exception ignored) {}
+            webView = null;
         }
         super.onDestroy();
     }
@@ -603,63 +531,10 @@ public final class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public boolean canDrawOverlays() {
-            return Settings.canDrawOverlays(MainActivity.this);
-        }
-
-        @JavascriptInterface
-        public boolean isSanOverlayRunning() {
-            return getSharedPreferences(SanOverlayService.PREFS, MODE_PRIVATE)
-                    .getBoolean(SanOverlayService.KEY_RUNNING, false);
-        }
-
-        @JavascriptInterface
-        public void requestSanOverlayPermission() {
-            runOnUiThread(() -> {
-                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:" + getPackageName()));
-                startActivity(intent);
-            });
-        }
-
-        @JavascriptInterface
-        public void startSanOverlay() {
-            runOnUiThread(() -> {
-                if (!Settings.canDrawOverlays(MainActivity.this)) {
-                    Toast.makeText(MainActivity.this, "Allow Display over other apps, then tap Start overlay again.", Toast.LENGTH_LONG).show();
-                    Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                            Uri.parse("package:" + getPackageName()));
-                    startActivity(intent);
-                    return;
-                }
-                Intent serviceIntent = new Intent(MainActivity.this, SanOverlayService.class);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(serviceIntent);
-                else startService(serviceIntent);
-                hapticFeedback("strong");
-                Toast.makeText(MainActivity.this, "SAN copy overlay started", Toast.LENGTH_SHORT).show();
-            });
-        }
-
-        @JavascriptInterface
-        public void stopSanOverlay() {
-            runOnUiThread(() -> {
-                stopService(new Intent(MainActivity.this, SanOverlayService.class));
-                Toast.makeText(MainActivity.this, "SAN copy overlay stopped", Toast.LENGTH_SHORT).show();
-            });
-        }
-
-        @JavascriptInterface
         public String readClipboardText() {
             return MainActivity.this.readClipboardText();
         }
 
-        @JavascriptInterface
-        public String consumeSanOverlayText() {
-            SharedPreferences prefs = getSharedPreferences(SanOverlayService.PREFS, MODE_PRIVATE);
-            String text = prefs.getString(SanOverlayService.KEY_PENDING_TEXT, "");
-            prefs.edit().remove(SanOverlayService.KEY_PENDING_TEXT).apply();
-            return text == null ? "" : text;
-        }
 
         @JavascriptInterface
         public void haptic(String kind) {
@@ -671,16 +546,6 @@ public final class MainActivity extends Activity {
             runOnUiThread(() -> requestNativeLocation(prefix == null ? "meeting" : prefix));
         }
 
-        @JavascriptInterface
-        public boolean hasPlacesApi() {
-            return placesClient != null;
-        }
-
-        @JavascriptInterface
-        public void searchNearbyHospitals(String prefix, double latitude, double longitude, double radiusMeters) {
-            runOnUiThread(() -> MainActivity.this.searchNearbyHospitals(
-                    prefix == null ? "nearby" : prefix, latitude, longitude, radiusMeters));
-        }
 
         @JavascriptInterface
         public void startVoiceCapture(String prefix) {

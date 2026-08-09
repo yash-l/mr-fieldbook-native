@@ -22,15 +22,13 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
 
       - name: Build Android APK
-        env:
-          PLACES_API_KEY: ${{ secrets.PLACES_API_KEY }}
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon --stacktrace -PPLACES_API_KEY="${PLACES_API_KEY:-NO_KEY}" clean assembleDebug
+          ./gradlew --no-daemon --stacktrace clean assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: MR-Machine-Intelligence-v14.5-APK
+          name: MR-FieldFlow-v19-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
