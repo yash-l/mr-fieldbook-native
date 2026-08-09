@@ -1,7 +1,7 @@
 {
-  "name": "MR Machine Intelligence v14",
-  "short_name": "MR Machine",
-  "description": "Intelligent MR field app with smart patch, not-met rescheduling, doctor-hospital verification, POB and company report pack.",
+  "name": "MR FieldBook Practical v20",
+  "short_name": "MR FieldBook",
+  "description": "Offline practical medical representative field app for DCR, doctor and chemist visits, RCPA, samples, expenses, POB, tour plan, sales and reports.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

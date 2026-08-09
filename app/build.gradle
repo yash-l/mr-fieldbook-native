@@ -2,6 +2,7 @@ plugins {
     id 'com.android.application'
 }
 
+def placesApiKey = project.findProperty('PLACES_API_KEY') ?: System.getenv('PLACES_API_KEY') ?: 'NO_KEY'
 
 android {
     namespace 'com.mrfieldbook.app'
@@ -11,8 +12,9 @@ android {
         applicationId 'com.mrfieldbook.app'
         minSdk 28
         targetSdk 34
-        versionCode 190
-        versionName '19.0.0'
+        versionCode 200
+        versionName '20.0.0'
+        manifestPlaceholders = [PLACES_API_KEY: placesApiKey]
     }
 
     buildTypes {
@@ -30,5 +32,6 @@ android {
 
 
 dependencies {
+    implementation 'com.google.android.libraries.places:places:5.3.0'
     implementation 'com.google.android.material:material:1.12.0'
 }

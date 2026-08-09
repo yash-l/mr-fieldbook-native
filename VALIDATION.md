@@ -1,28 +1,31 @@
-# MR FieldFlow v19 validation
+# Validation — MR Machine Intelligence v14.4
 
-Validation performed on the packaged source in this environment.
+## Passed in this delivery
 
-## Passed
-- `node --check app/src/main/assets/web/app.js`
-- `node --check app/src/main/assets/web/seed-data.js`
-- AndroidManifest XML parse
-- Web manifest JSON parse
-- Static HTML parse and duplicate-ID check
-- GitHub Actions workflow YAML parse
-- Static render/bind ID audit for Today, Doctors, Chemists, Activity and Tools
-- Default-state test: v19, zero fake visits, zero fake opening calls, Expenses array present
-- v18 → v19 migration test
-- Expense total/save-state test
-- Corrupt-primary → last-good-state recovery test
-- App versionCode 190 / versionName 19.0.0
-- GitHub artifact name updated to `MR-FieldFlow-v19-APK`
-- Cleartext traffic disabled
-- Startup GPS removed
-- Doctor visit and POB duplicate-submit guards present
-- Android Back handler added
-- Speech/GPS lifecycle cleanup and WebView destruction added
+- `app.js` passes `node --check`.
+- Android manifest and web manifest parse as XML/JSON.
+- `android.useAndroidX=true` remains enabled.
+- Gradle `plugins {}` block remains first in `app/build.gradle`.
+- App version is `14.4.0` / versionCode `144`.
+- Android manifest declares the visible overlay permission and Android 14 special-use foreground-service type.
+- SAN overlay service includes a draggable MR bubble, editable paste box, clipboard-on-tap action, send-to-app action and stop action.
+- SAN copied text is reviewed and parsed before it can pre-fill Log Meeting.
+- Meeting chemist selection is searchable by name, area and address.
+- Doctor route ordering is strict nearest-chain from each previous stop; timing conflict is a warning only.
+- Premium transitions and native haptic bridge are included.
+- Accepted/placed orders with pending fulfilment remain included in distributor planning.
+- Doctors sharing the same hospital/place/map coordinate remain grouped into one route stop.
 
-## Android compile status
-A full Gradle APK compilation could not be completed in this execution environment because the supplied launcher needs to download Gradle 8.13 from `services.gradle.org`, and DNS/network access is unavailable here. The build attempt was made and failed only at that download step.
+## Still requires GitHub/phone verification
 
-Use the included GitHub Actions workflow or an Android SDK environment with network access for the final APK compile.
+- Android APK compilation and dependency resolution on GitHub Actions.
+- First-time “Display over other apps” permission flow on the user’s phone.
+- Overlay behavior over the installed SAN app; protected screens may block overlays.
+- Clipboard paste behavior on the user’s Android/OxygenOS build.
+- Haptic strength and premium transition feel on the user’s phone.
+- Google Maps route opening with real verified coordinates.
+- Live Google Places results when `PLACES_API_KEY` is configured.
+
+## Routing rule
+
+The selected start doctor/hospital is the origin. The next stop is the geographically nearest remaining verified hospital. After reaching that stop, the next selection is recalculated from that stop, continuing until all eligible stops are ordered. Timing conflicts are displayed but do not cause the route to jump over a nearer location. Google Maps calculates the final road route; in-app distance remains an approximate straight-line estimate.
