@@ -471,7 +471,6 @@ public final class MainActivity extends Activity {
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
             webReady = true;
-            mainHandler.postDelayed(MainActivity.this::deliverPendingSanText, 250L);
         }
 
         @Override
