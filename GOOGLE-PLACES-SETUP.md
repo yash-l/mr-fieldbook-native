@@ -39,4 +39,4 @@ Download artifact:
 
 ## Important key-security note
 
-A debug APK produced on temporary GitHub runners may not have a stable signing SHA-1 across every rebuild. For strict Android app restrictions and long-term use, sign release APKs with one stable private keystore, then restrict the key to package `com.mrone.fieldapp` and that certificate SHA-1. Until then, limit the API itself and set conservative quotas; never publish an unrestricted key.
+A debug APK produced on temporary GitHub runners may not have a stable signing SHA-1 across every rebuild. For strict Android app restrictions and long-term use, sign release APKs with one stable private keystore, then restrict the key to package `com.mrfieldbook.app` and that certificate SHA-1. Until then, limit the API itself and set conservative quotas; never publish an unrestricted key.

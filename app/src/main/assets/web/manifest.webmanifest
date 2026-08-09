@@ -1,12 +1,12 @@
 {
   "name": "MR One",
-  "short_name": "MR FieldBook",
+  "short_name": "MR One",
   "description": "Offline practical medical representative field app for DCR, doctor and chemist visits, RCPA, samples, expenses, POB, tour plan, sales and reports.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#f3f6fa",
-  "theme_color": "#0f766e",
+  "background_color": "#f5f7fb",
+  "theme_color": "#0b766d",
   "orientation": "portrait-primary",
   "icons": [
     {

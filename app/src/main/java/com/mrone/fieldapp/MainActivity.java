@@ -78,6 +78,8 @@ public final class MainActivity extends Activity {
     private String placesInitError = "Google Places API key is not configured.";
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean webReady;
+    private long lastBackPressedAt;
+    private static final long EXIT_BACK_WINDOW_MS = 1800L;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -161,11 +163,30 @@ public final class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) {
-            webView.goBack();
-        } else {
-            super.onBackPressed();
+        if (webView == null) {
+            handleDoubleBackExit();
+            return;
         }
+
+        String script = "(function(){try{return window.__mrHandleBack?window.__mrHandleBack():'exit';}catch(e){return 'exit';}})();";
+        webView.evaluateJavascript(script, value -> runOnUiThread(() -> {
+            String result = value == null ? "" : value.replace("\"", "").trim();
+            if ("handled".equalsIgnoreCase(result)) {
+                lastBackPressedAt = 0L;
+                return;
+            }
+            handleDoubleBackExit();
+        }));
+    }
+
+    private void handleDoubleBackExit() {
+        long now = System.currentTimeMillis();
+        if (now - lastBackPressedAt <= EXIT_BACK_WINDOW_MS) {
+            finish();
+            return;
+        }
+        lastBackPressedAt = now;
+        Toast.makeText(this, "Press back again to exit", Toast.LENGTH_SHORT).show();
     }
 
     @Override

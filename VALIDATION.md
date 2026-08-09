@@ -1,18 +1,28 @@
-# MR One v1.0 Validation
+# Validation — MR One v1.3.0
 
-## Passed source checks
-- `node --check` passed for `app.js` and `seed-data.js`.
-- Android manifest and resources XML parse passed.
-- Web manifest JSON parse passed.
-- GitHub Actions YAML parse passed.
-- Android package wiring is consistently `com.mrone.fieldapp`.
-- Quick Doctor Details action/function wiring passed.
-- One-time automatic GPS wiring passed for Quick Doctor Details and Smart Monthly Plan.
-- Google Places nearby hospital auto-search wiring passed for Quick Doctor Details when an API key is configured.
-- Monthly visit policy and monthly eligibility functions are present and wired into planning/intelligence.
-- Smart monthly route function is present and timing-aware.
-- Uploaded v14.5 backup shape validated: 213 doctors, 228 chemists/stockists, 15 visits. Legacy doctors receive a safe default monthly target of 2 until changed.
-- Nearest-chain deterministic test passed: with equal timing windows and Doctor 1 near Doctor 3 while Doctor 2 is far, route order is 1 → 3 → 2.
+## Static checks required before delivery
+- JavaScript syntax: app.js + seed-data.js.
+- Android XML + web manifest JSON parse.
+- GitHub Actions YAML parse.
+- No duplicate static HTML ids.
+- Android namespace/applicationId/package declarations all `com.mrone.fieldapp`.
+- versionCode 130 / versionName 1.3.0.
+- SAN pending-text delivery method remains present.
+- Doctor-will-call reminder + conversion functions present.
+- Timing/type/area filters, Google search, locality inference and 50 m proximity prompt present.
+- Old backup JSON parses and remains external to the public source package.
+- ZIP integrity test.
 
-## Android compile status
-A local Gradle compile was attempted but the sandbox cannot resolve `services.gradle.org`, so Gradle 8.13 could not download. This is an environment/network limitation, not a successful APK compile. GitHub Actions must be used for the final Android compiler verification.
+## Performance architecture
+- `saveState()` no longer renders every hidden page.
+- Navigation renders only the active page.
+- Doctor/chemist search is debounced and rendered in 60-item batches.
+- Global search is debounced and capped at 30 results.
+- Record-like cards use CSS containment/content-visibility.
+
+## Runtime checks still required on Android/GitHub
+- Gradle dependency resolution and `assembleDebug`.
+- Google Places with configured API key.
+- Real phone GPS proximity prompt accuracy.
+- Double-back behavior with Android gesture/back button.
+- Visual/performance smoke test on the target phone.
