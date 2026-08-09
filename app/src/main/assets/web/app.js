@@ -3,7 +3,7 @@
 
   const STORE_KEY = 'mr-daily-auto-v3';
   const STORE_BACKUP_KEY = 'mr-daily-auto-v3-last-good';
-  const APP_VERSION = 20.0;
+  const APP_VERSION = 20.2;
   const METRICS = [
     ['calls', 'Calls'],
     ['inputs', 'Input Distributed'],
@@ -29,6 +29,12 @@
   const monthKey = date => String(date || localISODate()).slice(0, 7);
   const uid = prefix => `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   const clean = v => String(v ?? '').replace(/\s+/g, ' ').trim();
+  function splitCodedChemistName(value) {
+    const raw=clean(value);
+    const m=raw.match(/^(\d{4,})\s*:\s*(.+)$/);
+    return m ? {name:clean(m[2]), code:m[1]} : {name:raw, code:''};
+  }
+  const cleanChemistName = value => splitCodedChemistName(value).name;
   const norm = v => clean(v).toLowerCase().replace(/\b(dr|doctor|mr|mrs|ms|md)\.?\b/g, '').replace(/[^a-z0-9]+/g, '');
   const num = v => Number.isFinite(Number(v)) ? Number(v) : 0;
   const esc = v => String(v ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
@@ -252,10 +258,13 @@ function defaultSchemes() {
       d.meetingFrom = normalizeTime(d.meetingFrom); d.meetingTo = normalizeTime(d.meetingTo);
       d.meetingFrom2 = normalizeTime(d.meetingFrom2); d.meetingTo2 = normalizeTime(d.meetingTo2);
       if (!d.linkedChemistId && d.chemistId) d.linkedChemistId = d.chemistId;
+      if (d.chemistName) d.chemistName = cleanChemistName(d.chemistName);
     });
     out.chemists.forEach(c => {
       if (!c.id) c.id = uid('ch');
-      c.name = clean(c.name);
+      const parsedName=splitCodedChemistName(c.name);
+      if(parsedName.code && !c.stockistCode)c.stockistCode=parsedName.code;
+      c.name = parsedName.name;
       c.address = clean(c.address);
       c.area = clean(c.area || c.hq);
       if (!c.linkedDistributorId && c.distributorId) c.linkedDistributorId = c.distributorId;
@@ -265,7 +274,7 @@ function defaultSchemes() {
       d.name=clean(d.name); d.address=clean(d.address); d.area=clean(d.area||d.hq); d.mobile=clean(d.mobile);
     });
     out.schemes.forEach(x=>{if(!x.id)x.id=uid('sch');x.product=clean(x.product);x.pack=clean(x.pack);x.ratio=clean(x.ratio);});
-    out.orders.forEach(o=>{if(!o.id)o.id=uid('ord');if(!Array.isArray(o.items))o.items=[];});
+    out.orders.forEach(o=>{if(!o.id)o.id=uid('ord');if(!Array.isArray(o.items))o.items=[];if(o.chemistName)o.chemistName=cleanChemistName(o.chemistName);});
     out.visits.forEach(v => {
       if (!v.id) v.id = uid('log');
       if (!v.productStatuses || typeof v.productStatuses !== 'object') v.productStatuses = {};
@@ -273,6 +282,8 @@ function defaultSchemes() {
       if (!v.doctorName && v.entityType === 'doctor') v.doctorName = v.entityName;
       if (!v.chemistId && v.entityType === 'chemist') v.chemistId = v.entityId;
       if (!v.chemistName && v.entityType === 'chemist') v.chemistName = v.entityName;
+      if (v.chemistName) v.chemistName = cleanChemistName(v.chemistName);
+      if (v.entityType === 'chemist' && v.entityName) v.entityName = cleanChemistName(v.entityName);
       if (!v.doctorHospital && v.doctorId) v.doctorHospital = doctorHospital(out.doctors.find(d => d.id === v.doctorId));
       if (!v.latitude && v.location?.latitude) v.latitude = v.location.latitude;
       if (!v.longitude && v.location?.longitude) v.longitude = v.location.longitude;
@@ -283,6 +294,11 @@ function defaultSchemes() {
     out.tourPlans.forEach(x=>{if(!x.id)x.id=uid('tp');x.date=dateOnly(x.date||localISODate());x.area=clean(x.area);x.workType=clean(x.workType||'HQ');});
     out.rcpa.forEach(x=>{if(!x.id)x.id=uid('rcpa');x.rxQty=num(x.rxQty);});
     out.salesMonths.forEach(x=>{if(!x.id)x.id=uid('sale');x.month=clean(x.month||monthKey());x.target=num(x.target);x.primary=num(x.primary);x.secondary=num(x.secondary);x.collection=num(x.collection);});
+    out.captures.forEach(c=>{
+      if(c.chemistName)c.chemistName=cleanChemistName(c.chemistName);
+      if(c.parsed?.chemistName)c.parsed.chemistName=cleanChemistName(c.parsed.chemistName);
+    });
+    out.patchPlans.forEach(p=>(p.items||[]).forEach(i=>{if(i.chemistName)i.chemistName=cleanChemistName(i.chemistName);}));
     return out;
   }
 
@@ -786,6 +802,49 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
   }
   function receiveSamples(){if(!state.sampleItems.length){editSampleItem();return;}openSheet('Receive samples','Add stock allotted/received from company.',`<form id="receiveSampleForm" class="sheet-form"><label><span>Sample item</span><select name="sampleItemId" required>${sampleItemOptions()}</select></label><div class="field-grid two"><label><span>Date</span><input name="date" type="date" value="${esc(localISODate())}"></label><label><span>Qty received</span><input name="qty" type="number" min="1" step="1" value="1" required></label></div><label><span>Note / challan</span><textarea name="notes" rows="2"></textarea></label><div class="sticky-save"><button class="btn primary full" type="submit">Add received stock</button></div></form>`);$('#receiveSampleForm').addEventListener('submit',e=>{e.preventDefault();const fd=new FormData(e.currentTarget),item=sampleItemById(fd.get('sampleItemId')),qty=num(fd.get('qty'));if(!item||qty<=0){toast('Select item and quantity.');return;}state.sampleTransactions.push({id:uid('smt'),type:'receive',date:clean(fd.get('date'))||localISODate(),sampleItemId:item.id,product:item.product,pack:item.pack||'',batch:item.batch||'',qty,notes:clean(fd.get('notes')),createdAt:new Date().toISOString()});saveState();closeSheet();toast('Sample stock received.');});}
   function issueSamples(doctorId='') {if(!state.sampleItems.length){toast('Add sample stock first.');manageSamples();return;}openSheet('Give samples to doctor','Distribution is deducted immediately from your sample balance.',`<form id="issueSampleForm" class="sheet-form"><label><span>Doctor</span><select name="doctorId" required>${doctorOptions(doctorId)}</select></label><div id="standaloneSampleRows">${sampleIssueRow()}</div><button type="button" id="addStandaloneSampleRow" class="btn secondary compact">+ Another sample</button><label><span>Note</span><textarea name="notes" rows="2"></textarea></label><div class="sticky-save"><button class="btn primary full" type="submit">Save distribution</button></div></form>`);const root=$('#standaloneSampleRows');bindSampleIssueRows(root);$('#addStandaloneSampleRow').addEventListener('click',()=>root.insertAdjacentHTML('beforeend',sampleIssueRow({},root.children.length)));$('#issueSampleForm').addEventListener('submit',e=>{e.preventDefault();const fd=new FormData(e.currentTarget),doctor=doctorById(fd.get('doctorId')),issues=collectSampleIssues(root),err=validateSampleIssues(issues);if(!doctor){toast('Select doctor.');return;}if(!issues.length){toast('Add at least one sample.');return;}if(err){toast(err);return;}commitSampleIssues(issues,{date:localISODateTime(),doctor,notes:fd.get('notes')});saveState();closeSheet();toast('Sample distribution saved.');});}
+
+  function doctorPlanSearchText(doctor){
+    return clean([doctor?.area,doctor?.town,doctor?.hq,doctorHospital(doctor),doctor?.address,doctor?.hospitalAddress].filter(Boolean).join(' '));
+  }
+  function doctorSlotsForDate(doctor,date){
+    const d=new Date(`${date}T12:00:00`);if(Number.isNaN(d.getTime()))return [];
+    if(!normalizeMeetingDays(doctor?.meetingDays).includes(d.getDay()))return [];
+    return doctorMeetingSlots(doctor).map(slot=>({...slot,start:timeMinutes(slot.from),end:timeMinutes(slot.to)})).filter(slot=>slot.start!==null&&slot.end!==null);
+  }
+  function areaTimeDoctorMatches({date,area,from,to,includeVisited=false}){
+    const start=timeMinutes(from),end=timeMinutes(to),key=norm(area),visited=new Set(rowsForDay(date).map(v=>v.doctorId).filter(Boolean));
+    if(start===null||end===null||end<start)return {rows:[],badWindow:true,missingTiming:0};
+    let missingTiming=0;
+    const rows=[];
+    state.doctors.forEach(doctor=>{
+      if(key&&!norm(doctorPlanSearchText(doctor)).includes(key))return;
+      const slots=doctorSlotsForDate(doctor,date);
+      if(!slots.length){missingTiming++;return;}
+      if(visited.has(doctor.id)&&!includeVisited)return;
+      const overlap=slots.filter(slot=>slot.start<=end&&slot.end>=start).sort((a,b)=>a.start-b.start)[0];
+      if(!overlap)return;
+      const due=Boolean(doctor.nextFollowUp&&doctor.nextFollowUp<=date),last=latestDoctorVisit(doctor.id,true),days=last?daysBetween(last.date,date):999;
+      rows.push({doctor,slot:overlap,visited:visited.has(doctor.id),due,last,days,chemist:linkedChemist(doctor),map:entityMapUrl(doctor)});
+    });
+    rows.sort((a,b)=>a.visited-b.visited||a.slot.start-b.slot.start||Number(b.due)-Number(a.due)||b.days-a.days||doctorDisplayName(a.doctor).localeCompare(doctorDisplayName(b.doctor)));
+    return {rows,badWindow:false,missingTiming};
+  }
+  function renderAreaTimeDoctorResults(values){
+    const box=$('#areaTimePlanResults');if(!box)return;
+    const result=areaTimeDoctorMatches(values);
+    if(result.badWindow){box.innerHTML='<div class="notice error">End time must be after start time.</div>';return;}
+    if(!result.rows.length){box.innerHTML=`${empty(`No doctor matches ${values.area} for this date/time window.`)}${result.missingTiming?`<div class="notice">${esc(result.missingTiming)} doctor(s) in this area/date do not have usable meeting timing saved.</div>`:''}`;return;}
+    box.innerHTML=`<div class="plan-result-head"><strong>${esc(result.rows.length)} doctor${result.rows.length===1?'':'s'} planned</strong><small>${esc(prettyDate(values.date))} • ${esc(timeLabel(values.from))}–${esc(timeLabel(values.to))} • ${esc(values.area)}</small></div><div class="area-time-plan-list">${result.rows.map((x,i)=>{const d=x.doctor,labels=[`${timeLabel(x.slot.from)}–${timeLabel(x.slot.to)}`,doctorHospital(d),x.chemist?.name,x.due?'Follow-up due':'',x.last?`Last ${prettyDate(x.last.date)}`:'No met history',x.map?'GPS ready':'GPS pending',x.visited?'Already called':''].filter(Boolean);return `<article class="area-time-plan-row"><div class="plan-seq">${i+1}</div><div class="plan-doctor-copy"><strong>${esc(doctorDisplayName(d))}</strong><small>${esc(labels.join(' • '))}</small></div><div class="plan-doctor-actions">${x.map?`<a href="${x.map}" target="_blank" rel="noopener">Map</a>`:''}<button data-action="view-record" data-type="doctor" data-id="${esc(d.id)}">View</button><button class="primary-action" data-action="log-record" data-type="doctor" data-id="${esc(d.id)}">Meet</button></div></article>`;}).join('')}</div>${result.missingTiming?`<div class="notice">${esc(result.missingTiming)} matching doctor(s) have no meeting timing for this date, so they are excluded.</div>`:''}`;
+  }
+  function areaTimeDoctorPlan(){
+    const tp=latestTourPlan(),areas=[...new Set(state.doctors.flatMap(d=>[clean(d.area),clean(d.town),clean(d.hq)]).filter(Boolean))].sort((a,b)=>a.localeCompare(b)),defaultArea=clean(tp?.area||state.profile.hq||areas[0]||''),current=now(),defaultFrom=`${pad(current.getHours())}:${current.getMinutes()<30?'00':'30'}`;
+    const endDate=new Date(current);endDate.setHours(Math.min(23,current.getHours()+4),current.getMinutes()<30?0:30,0,0);const defaultTo=`${pad(endDate.getHours())}:${pad(endDate.getMinutes())}`;
+    openSheet('Area & Time Doctor Plan','Choose area + date + time. Only doctors whose saved meeting window overlaps are shown.',`<form id="areaTimePlanForm" class="sheet-form"><label><span>Area / town</span><input name="area" list="areaTimePlanAreas" value="${esc(defaultArea)}" placeholder="Nikol / Naroda / Ahmedabad" required><datalist id="areaTimePlanAreas">${areas.map(a=>`<option value="${esc(a)}"></option>`).join('')}</datalist></label><div class="field-grid two"><label><span>Date</span><input name="date" type="date" value="${localISODate()}" required></label><label><span>Include already called</span><select name="includeVisited"><option value="no">No</option><option value="yes">Yes</option></select></label><label><span>From</span><input name="from" type="time" value="${defaultFrom}" required></label><label><span>To</span><input name="to" type="time" value="${defaultTo}" required></label></div><button class="btn primary full" type="submit">Show doctor plan</button></form><div id="areaTimePlanResults" class="detail-section"></div>`);
+    const form=$('#areaTimePlanForm');
+    const run=()=>{const fd=new FormData(form);renderAreaTimeDoctorResults({area:clean(fd.get('area')),date:clean(fd.get('date'))||localISODate(),from:clean(fd.get('from')),to:clean(fd.get('to')),includeVisited:fd.get('includeVisited')==='yes'});};
+    form.addEventListener('submit',e=>{e.preventDefault();run();});
+    if(defaultArea)run();
+  }
 
   function manageTourPlan(){const today=latestTourPlan(),recent=state.tourPlans.slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,20);openSheet('Tour Program','Keep it practical: date, work type, area and joint work. Doctor selection remains in your smart patch/route.',`<div class="manager-summary"><div><small>TODAY</small><strong>${esc(today?.workType||'—')}</strong></div><div><small>AREA</small><strong>${esc(today?.area||'Not set')}</strong></div><div><small>JOINT WORK</small><strong>${esc(today?.jointWorkWith||'IND')}</strong></div></div><div class="button-row"><button class="btn primary" data-action="edit-tour-plan" data-id="${esc(today?.id||'')}">${today?'Edit today':'+ Plan today'}</button></div><div class="detail-section"><h4>Recent plans</h4>${recent.length?recent.map(x=>`<div class="ledger-row"><div class="copy"><strong>${esc(prettyDate(x.date))} • ${esc(x.workType||'HQ')} • ${esc(x.area||'')}</strong><small>${esc([x.jointWorkWith,x.objective,x.notes].filter(Boolean).join(' • '))}</small></div><div class="value"><button data-action="edit-tour-plan" data-id="${esc(x.id)}">Edit</button></div></div>`).join(''):empty('No tour plan yet.')}</div>`);}
   function editTourPlan(id='') {const old=state.tourPlans.find(x=>x.id===id)||latestTourPlan()||{};openSheet(id?'Edit Tour Program':'Plan field day','TP is linked automatically to DCRs saved on the same date.',`<form id="tourPlanForm" class="sheet-form"><div class="field-grid two"><label><span>Date</span><input name="date" type="date" value="${esc(dateOnly(old.date)||localISODate())}" required></label><label><span>Work type</span><select name="workType"><option ${old.workType==='HQ'?'selected':''}>HQ</option><option ${old.workType==='EX'?'selected':''}>EX</option><option ${old.workType==='OS'?'selected':''}>OS</option><option ${old.workType==='Transit'?'selected':''}>Transit</option></select></label></div><label><span>Area / town</span><input name="area" value="${esc(old.area||state.profile.hq||'')}" required></label><label><span>Joint work with</span><input name="jointWorkWith" value="${esc(old.jointWorkWith||state.profile.joinWorkWith||'IND')}"></label><label><span>Objective</span><input name="objective" value="${esc(old.objective||'')}" placeholder="Coverage / launch / follow-up / camp"></label><label><span>Note</span><textarea name="notes" rows="2">${esc(old.notes||'')}</textarea></label><div class="sticky-save"><button class="btn primary full" type="submit">Save Tour Program</button></div></form>`);$('#tourPlanForm').addEventListener('submit',e=>{e.preventDefault();const fd=new FormData(e.currentTarget),date=clean(fd.get('date')),existing=id?state.tourPlans.find(x=>x.id===id):state.tourPlans.find(x=>dateOnly(x.date)===date),rec={...(existing||{}),id:existing?.id||uid('tp'),date,workType:clean(fd.get('workType')),area:clean(fd.get('area')),jointWorkWith:clean(fd.get('jointWorkWith')),objective:clean(fd.get('objective')),notes:clean(fd.get('notes')),updatedAt:new Date().toISOString()};if(!rec.area){toast('Enter area/town.');return;}if(existing)Object.assign(existing,rec);else{rec.createdAt=new Date().toISOString();state.tourPlans.push(rec);}saveState();closeSheet();toast('Tour Program saved.');});}
@@ -1370,7 +1429,7 @@ function planTodayRoute(){
 function workbookData(){
   const latestRoute=state.routePlans.filter(r=>r.date===localISODate()).slice(-1)[0];
   return {sheets:[
-    {name:'Summary',rows:[['MR FieldBook Practical v20 Export',localISODateTime()],['HQ',state.profile.hq],['TM',state.profile.tmName],['Doctors',state.doctors.length],['Chemists',state.chemists.length],['Distributors',state.distributors.length],['Orders',state.orders.length],['RCPA',state.rcpa.length],['Sample Items',state.sampleItems.length],['Sample Balance',state.sampleItems.reduce((n,x)=>n+sampleBalance(x),0)],['Expenses This Month',expenseTotal(expensesForMonth())],['Voice Captures',state.captures.length],['Active Schemes',state.schemes.filter(x=>schemeState(x)==='active').length],[],['Metric','Today','Month Cumulative'],...METRICS.map(([k,l])=>[l,statsForDay()[k],statsForMonth()[k]]),['Samples Issued',sampleIssuedForDay(),sampleIssuedForMonth()],['Expenses',expenseTotal(expensesForDay()),expenseTotal(expensesForMonth())],['RCPA',state.rcpa.filter(x=>dateOnly(x.date)===localISODate()).length,state.rcpa.filter(x=>monthKey(x.date)===monthKey()).length]]},
+    {name:'Summary',rows:[['MR FieldBook Practical v20.1 Export',localISODateTime()],['HQ',state.profile.hq],['TM',state.profile.tmName],['Doctors',state.doctors.length],['Chemists',state.chemists.length],['Distributors',state.distributors.length],['Orders',state.orders.length],['RCPA',state.rcpa.length],['Sample Items',state.sampleItems.length],['Sample Balance',state.sampleItems.reduce((n,x)=>n+sampleBalance(x),0)],['Expenses This Month',expenseTotal(expensesForMonth())],['Voice Captures',state.captures.length],['Active Schemes',state.schemes.filter(x=>schemeState(x)==='active').length],[],['Metric','Today','Month Cumulative'],...METRICS.map(([k,l])=>[l,statsForDay()[k],statsForMonth()[k]]),['Samples Issued',sampleIssuedForDay(),sampleIssuedForMonth()],['Expenses',expenseTotal(expensesForDay()),expenseTotal(expensesForMonth())],['RCPA',state.rcpa.filter(x=>dateOnly(x.date)===localISODate()).length,state.rcpa.filter(x=>monthKey(x.date)===monthKey()).length]]},
     {name:'Doctors',rows:[['Doctor Name','Hospital / Clinic','Google Place ID','Hospital Opening Hours','Under Chemist','Meeting Days','Meeting From 1','Meeting To 1','Meeting From 2','Meeting To 2','Address','Area','Latitude','Longitude','Location Source','Last Meeting','Next Follow-up','Notes'],...state.doctors.map(d=>[d.name,doctorHospital(d),d.placeId||'',(d.hospitalOpeningHours||[]).join('; '),linkedChemist(d)?.name||d.chemistName,normalizeMeetingDays(d.meetingDays).map(x=>DAY_NAMES[x]).join('; '),d.meetingFrom,d.meetingTo,d.meetingFrom2,d.meetingTo2,d.address,d.area,d.latitude,d.longitude,d.locationSource||'',d.lastVisit,d.nextFollowUp,d.notes])]},
     {name:'Chemists',rows:[['Chemist Name','Preferred Distributor','Address','Area','Latitude','Longitude','Last Meeting','Next Follow-up','Notes'],...state.chemists.map(c=>[c.name,preferredDistributor(c)?.name||c.distributorName,c.address,c.area,c.latitude,c.longitude,c.lastVisit,c.nextFollowUp,c.notes])]},
     {name:'Distributors',rows:[['Distributor Name','Mobile','Address','Area','Latitude','Longitude','Last Order','Notes'],...state.distributors.map(d=>[d.name,d.mobile,d.address,d.area,d.latitude,d.longitude,d.lastOrderDate,d.notes])]},
@@ -1441,9 +1500,13 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
   const mergeArrays=(a,b)=>[...new Set([...(a||[]),...(b||[])].map(clean).filter(Boolean))];
 
   function upsertChemist(rec){
-    const key=norm(rec.name),place=norm(rec.area||rec.hq);let old=state.chemists.find(x=>norm(x.name)===key&&(!place||norm(x.area||x.hq)===place))||state.chemists.find(x=>norm(x.name)===key);
-    if(!old){const created={...rec,id:uid('ch'),createdAt:new Date().toISOString(),products:rec.products||[]};state.chemists.push(created);return {mode:'added',record:created};}
-    const protectedFields=['notes','lastVisit','nextFollowUp','createdAt','id','latitude','longitude','locationCapturedAt'];Object.entries(rec).forEach(([k,v])=>{if(protectedFields.includes(k)||v===''||v==null)return;if(Array.isArray(v))old[k]=mergeArrays(old[k],v);else old[k]=v;});old.sourceFiles=mergeArrays(old.sourceFiles,rec.sourceFiles);old.updatedAt=new Date().toISOString();return {mode:'updated',record:old};
+    const incoming={...(rec||{})};
+    const parsedName=splitCodedChemistName(incoming.name);
+    incoming.name=parsedName.name;
+    if(parsedName.code&&!incoming.stockistCode)incoming.stockistCode=parsedName.code;
+    const key=norm(incoming.name),place=norm(incoming.area||incoming.hq);let old=state.chemists.find(x=>norm(x.name)===key&&(!place||norm(x.area||x.hq)===place))||state.chemists.find(x=>norm(x.name)===key);
+    if(!old){const created={...incoming,id:uid('ch'),createdAt:new Date().toISOString(),products:incoming.products||[]};state.chemists.push(created);return {mode:'added',record:created};}
+    const protectedFields=['notes','lastVisit','nextFollowUp','createdAt','id','latitude','longitude','locationCapturedAt'];Object.entries(incoming).forEach(([k,v])=>{if(protectedFields.includes(k)||v===''||v==null)return;if(Array.isArray(v))old[k]=mergeArrays(old[k],v);else old[k]=v;});old.sourceFiles=mergeArrays(old.sourceFiles,incoming.sourceFiles);old.updatedAt=new Date().toISOString();return {mode:'updated',record:old};
   }
   function upsertDoctor(rec){
     const key=norm(rec.name),hospital=norm(rec.hospital),place=norm(rec.area||rec.hq);let old=state.doctors.find(x=>norm(x.name)===key&&hospital&&norm(doctorHospital(x))===hospital);if(!old&&hospital)old=state.doctors.find(x=>norm(x.name)===key&&!doctorHospital(x)&&(!place||norm(x.area||x.hq)===place));if(!old&&!hospital)old=state.doctors.find(x=>norm(x.name)===key&&(!place||norm(x.area||x.hq)===place))||state.doctors.find(x=>norm(x.name)===key&&!doctorHospital(x));
@@ -1555,6 +1618,7 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
         if(action==='receive-samples')receiveSamples();
         if(action==='issue-samples')issueSamples(a.dataset.doctorId||'');
         if(action==='manage-tour-plan')manageTourPlan();
+        if(action==='area-time-plan')areaTimeDoctorPlan();
         if(action==='edit-tour-plan')editTourPlan(id);
         if(action==='manage-sales')manageSales();
         if(action==='edit-sales')editSales();

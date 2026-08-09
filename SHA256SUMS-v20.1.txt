@@ -1,8 +1,9 @@
-4597ec3210215b28b490bd4023099a2a7669b2ba94baefa06b7f28e70b34faab  ./.github/workflows/build-apk.yml
+264a22ca5430ba1ba3fbb81471cc9f5c7506dfd5c7641feb87ffd076155ddc3b  ./.github/workflows/build-apk.yml
 9d0c62b809cf774b889dd315c3197a82950013bf105360f012746240149e4f89  ./.gitignore
 f5054e9a8dbbe422960d739a79fdcbb60364db620fb6771af57c9780fc2a7d30  ./CHANGELOG-v14.3.md
 2e3a3134a2b810bc3e4d56e09be8e86319dbb9fb26eafbeefbb894bea1e06e58  ./CHANGELOG-v14.4.md
 49180dc44a4dc7acffcfca3b2e9846fcaad9c23d21af23d5923221b5f0166480  ./CHANGELOG-v14.md
+41882df4c4eeba93903a2a116e90bc4d3554080d5047880741b85bb6429dc57b  ./CHANGELOG-v20.1.md
 382f76ce84a61f04827b99ccb49d73ba6b5bd876f6b52cb4a18a125c752fe733  ./CHANGELOG-v20.md
 104abc8f0eaacc0cc88ee5089610aceeb8edb6999cc0494a71b478157685e671  ./GOOGLE-PLACES-SETUP.md
 2dae017c207494c4565e94b9e81ab622c61069ceb23b857f2f70a32996b7d456  ./IMPORT-TEMPLATE.csv
@@ -11,10 +12,10 @@ e2cf1c9a540e64e886a960df5806a577b5f70d0d65548f4d03eef7cd67e10ef8  ./README.md
 837aa8427f84a0903442ad1c3eb00a5bd4ab9bc076ac969b9f7074a484b5077f  ./VALIDATION-v20.md
 453f2c2d97ca0cba272dc9d28392c59c37e491c56f691967a108aeca887e2e16  ./VALIDATION.md
 79cb8aba943ef1aeb8d8502fca44ea5da763cf4035b7146715e7d34b364678a4  ./VOICE-CAPTURE-EXAMPLES.md
-6dfb6669d1065a575a44378317cd5229309c76e7e7e6175763b9eb474518ecbe  ./app/build.gradle
+428fa6d1dccf6622c6a6a9092aff9acc646f4b5df5fe11507c0600163cd72b07  ./app/build.gradle
 f75b04455b758b3b3a90fed280d25d599c4ae1abf891b88f50b71f6700d69f9d  ./app/proguard-rules.pro
 cdfb172dc96c2f9459d00039320a62c443755a2d5fc511dcfafae85ddc49fd0a  ./app/src/main/AndroidManifest.xml
-29a487d082b383d915fdb3835d39a5bd4c69fe51a769fae6a3d3f92d1f944c15  ./app/src/main/assets/web/app.js
+d7ad55e93f38863193e5a318c5cc01b83aeced3b4bdd332fad4c5a562e1f6b20  ./app/src/main/assets/web/app.js
 8fa7f4dc3ed8847c04a4e5469d7a146d12e5f2e6a95c825bebee8493033ecdfc  ./app/src/main/assets/web/icons/icon-192.png
 8f2500c93119a698d23be1ad904a6c341bedff962c1790c780c3e158d5b478da  ./app/src/main/assets/web/icons/icon-512.png
 ba2b8e14d9389441f31a321c65efd7b5c4c67e9de49eb4dc6ee81bc6ff8f164d  ./app/src/main/assets/web/index.html
