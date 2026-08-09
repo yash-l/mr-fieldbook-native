@@ -104,7 +104,7 @@
             <div class="collection-head"><div><span class="eyebrow">SETUP MODE</span><h2 id="collectionModeTitle">Data gathering mode</h2></div><button id="workflowModeBtn" class="btn secondary compact">Switch to field work</button></div>
             <p id="collectionModeText">Confirm doctor, hospital, chemist, timing and GPS once.</p>
             <div class="progress-track"><span id="collectionProgressBar"></span></div>
-            <div class="collection-actions"><button data-action="add-doctor">+ Doctor</button><button data-action="add-chemist">+ Chemist</button><button data-action="add-distributor">+ Distributor</button><button data-nav="tools">Import / Backup</button></div>
+            <div class="collection-actions"><button data-action="add-doctor">+ Doctor</button><button data-action="add-chemist">+ Chemist</button><button data-action="add-distributor">+ Distributor</button><button type="button" data-nav="tools">Import / Backup</button></div>
           </div>
         </details>
       </section>
@@ -190,10 +190,10 @@
     </main>
 
     <nav class="bottom-nav fieldflow-nav" aria-label="Primary">
-      <button class="active" data-nav="dashboard"><span>⌂</span><small>Today</small></button>
-      <button data-nav="doctors"><span>⚕</span><small>Doctors</small></button>
-      <button class="nav-visit" data-action="quick-log" aria-label="Start doctor visit"><span>＋</span><small>Visit</small></button>
-      <button data-nav="visits"><span>✓</span><small>Activity</small></button>
+      <button type="button" class="active" data-nav="dashboard"><span>⌂</span><small>Today</small></button>
+      <button type="button" data-nav="doctors"><span>⚕</span><small>Doctors</small></button>
+      <button type="button" class="nav-visit" data-action="quick-log" aria-label="Start doctor visit"><span>＋</span><small>Visit</small></button>
+      <button type="button" data-nav="visits"><span>✓</span><small>Activity</small></button>
       <button data-nav="tools"><span>•••</span><small>More</small></button>
     </nav>
   </div>

@@ -694,7 +694,7 @@ function orderMiniCard(o){
     $$('.page').forEach(p=>p.classList.toggle('active',p.dataset.page===page));
     $$('.bottom-nav button').forEach(b=>b.classList.toggle('active',b.dataset.nav===page));
     window.scrollTo({top:0,behavior:'auto'});
-    if(page==='doctors')renderDoctors(); if(page==='chemists')renderChemists(); if(page==='visits')renderVisits();
+    if(page==='doctors')renderDoctors(); if(page==='chemists')renderChemists(); if(page==='visits')renderVisits(); if(page==='tools')renderTools();
   }
   function openSheet(title,subtitle,body) {
     $('#sheetTitle').textContent=title; $('#sheetSubtitle').textContent=subtitle||''; $('#sheetBody').innerHTML=body;
@@ -1632,6 +1632,27 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
       const vf=e.target.closest('[data-visit-filter]');if(vf){visitFilter=vf.dataset.visitFilter;renderVisits();return;}
       if(e.target.closest('[data-filter-followups="due"]')){visitFilter='due';navigate('visits');}
     });
+    const bottomNav=$('.bottom-nav');
+    bottomNav?.addEventListener('click',e=>{
+      const btn=e.target.closest('button');
+      if(!btn)return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      haptic('light');
+
+      if(btn.dataset.nav){
+        navigate(btn.dataset.nav);
+        return;
+      }
+
+      if(btn.dataset.action==='quick-log'){
+        if(!$('#editorSheet').classList.contains('hidden'))closeSheet();
+        setTimeout(()=>quickMeeting(),30);
+      }
+    });
+
     $('#sheetBackdrop').addEventListener('click',closeSheet);$('#quickLogBtn').addEventListener('click',openWorkMenu);$('#quickSearchBtn').addEventListener('click',globalSearch);
     $('#doctorSearch').addEventListener('input',renderDoctors);$('#chemistSearch').addEventListener('input',renderChemists);
     $('#doctorFilterBtn').addEventListener('click',()=>{doctorFilter=doctorFilter==='unlinked'?'all':'unlinked';renderDoctors();});
