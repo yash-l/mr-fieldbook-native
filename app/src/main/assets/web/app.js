@@ -3,7 +3,7 @@
 
   const STORE_KEY = 'mr-daily-auto-v3';
   const STORE_BACKUP_KEY = 'mr-daily-auto-v3-last-good';
-  const APP_VERSION = 1.3;
+  const APP_VERSION = 1.4;
   const METRICS = [
     ['calls', 'Calls'],
     ['inputs', 'Input Distributed'],
@@ -152,6 +152,16 @@
     if(h24){const h=Number(h24[1]),m=Number(h24[2]||0);if(h>=0&&h<24&&m>=0&&m<60)return `${pad(h)}:${pad(m)}`;}
     return '';
   }
+  function legacyClockFromText(value){
+    const raw=clean(value),m=raw.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);if(!m)return '';
+    return normalizeTime(`${m[1]}:${m[2]||'00'} ${m[3].toUpperCase()}`);
+  }
+  function inferredLegacyClinicSystem(doctor){
+    const note=clean(doctor?.notes);
+    if(/\bappointment\b/i.test(note))return 'appointment';
+    if(/\bcard\b/i.test(note))return 'card_later';
+    return 'direct';
+  }
   const timeMinutes=value=>{const t=normalizeTime(value);if(!t)return null;const [h,m]=t.split(':').map(Number);return h*60+m;};
   const timeLabel=value=>{const t=normalizeTime(value);if(!t)return '';const [h,m]=t.split(':').map(Number);const d=new Date(2000,0,1,h,m);return d.toLocaleTimeString('en-IN',{hour:'numeric',minute:'2-digit'});};
   function doctorMeetingSlots(doctor){
@@ -177,6 +187,25 @@
       for(const slot of slots){const start=timeMinutes(slot.from);if(offset===0&&start<=current)continue;const dayText=offset===0?'Today':offset===1?'Tomorrow':DAY_NAMES[day];return {state:'upcoming',label:`${dayText} ${timeLabel(slot.from)}`,detail:`${timeLabel(slot.from)}–${timeLabel(slot.to)}`};}
     }
     return {state:'scheduled',label:'Scheduled',detail:doctorMeetingTiming(doctor)};
+  }
+  function doctorTodayAvailability(doctor,at=now()){
+    const date=localISODate(at),clock=at.getHours()*60+at.getMinutes(),visited=rowsForDay(date).some(v=>v.doctorId===doctor.id),eligibility=doctorEligibilityForDate(doctor,date),access=doctorAccessForDate(doctor,date);
+    if(visited)return {available:false,state:'visited',label:'Already met today',access,eligibility};
+    if(!eligibility.eligible&&!access.fixed)return {available:false,state:'not_due',label:eligibility.reason,access,eligibility};
+    if(access.fixed){
+      const slot=access.slots[0];
+      if(!slot||slot.end<clock)return {available:false,state:'closed',label:'Appointment time passed',access,eligibility};
+      return {available:true,state:clock>=slot.start?'available':'appointment',label:clock>=slot.start?`Appointment now • until ${timeLabel(slot.to)}`:`Appointment ${timeLabel(slot.from)}`,slot,access,eligibility,fixed:true};
+    }
+    if(access.system==='appointment')return {available:false,state:'appointment_pending',label:access.reason||'Confirmed appointment required',access,eligibility};
+    const remaining=doctorSlotsForDate(doctor,date).filter(slot=>{const arrival=Math.max(clock,slot.start);return arrival+12<=slot.end;}).sort((a,b)=>a.start-b.start);
+    if(!remaining.length)return {available:false,state:'closed',label:'No usable meeting window left today',access,eligibility};
+    if(access.system==='card_later'&&!cardDroppedForDate(doctor.id,date)){
+      return {available:true,state:'card_task',label:`Card ${timeLabel(doctorCardDropTime(doctor))} → meet today`,slot:remaining[0],access,eligibility,cardTask:true};
+    }
+    if(!access.ready)return {available:false,state:'blocked',label:access.reason||'Clinic access pending',access,eligibility};
+    const active=remaining.find(slot=>clock>=slot.start&&clock<=slot.end),slot=active||remaining[0];
+    return {available:true,state:active?'available':'upcoming',label:active?`Available now • until ${timeLabel(slot.to)}`:`Today ${timeLabel(slot.from)}–${timeLabel(slot.to)}`,slot,access,eligibility};
   }
   const metricBlank = () => ({calls:0, inputs:0, basket:0, towel:0, conversation:0, newAvailability:0, pobValue:0});
   const sumInto = (out, row) => METRICS.forEach(([k]) => out[k] += num(row[k]));
@@ -214,7 +243,8 @@
     return {eligible:true,reason:`Visit ${count+1}/${policy.target} due`,count,...policy,last};
   }
   function doctorCompleteness(doctor){
-    const checks=[['Hospital',doctorHospital(doctor)],['Chemist',linkedChemist(doctor)],['Meeting days',normalizeMeetingDays(doctor?.meetingDays).length],['Meeting timing',doctorMeetingSlots(doctor).length],['Hospital GPS',num(doctor?.latitude)&&num(doctor?.longitude)]];
+    const system=doctorClinicSystem(doctor),timingReady=system==='appointment'||(normalizeMeetingDays(doctor?.meetingDays).length&&doctorMeetingSlots(doctor).length),accessReady=system!=='card_later'||Boolean(normalizeTime(doctor?.cardDropTime));
+    const checks=[['Hospital',doctorHospital(doctor)],['Chemist',linkedChemist(doctor)],['Clinic system',system],['Meeting timing',timingReady],['Card drop time',accessReady],['Hospital GPS',num(doctor?.latitude)&&num(doctor?.longitude)]];
     const missing=checks.filter(([,ok])=>!ok).map(([name])=>name),score=Math.round(((checks.length-missing.length)/checks.length)*100);
     return {score,missing,label:score===100?'Verified':score>=60?'Needs review':'Needs completion'};
   }
@@ -239,7 +269,8 @@
   }
   function intelligenceScore(doctor){
     if(rowsForDay().some(v=>v.doctorId===doctor.id))return -10000;
-    if(!doctorEligibilityForDate(doctor).eligible)return -10000;
+    if(!doctorEligibilityForDate(doctor).eligible&&!doctorAccessForDate(doctor).fixed)return -10000;
+    const access=doctorAccessForDate(doctor);if(!access.ready)return -10000;
     const timing=doctorMeetingStatus(doctor),complete=doctorCompleteness(doctor),last=latestDoctorVisit(doctor.id,true),days=last?daysBetween(last.date,localISODate()):999,notMet=recentNotMetCount(doctor.id),due=doctor.nextFollowUp&&doctor.nextFollowUp<=localISODate(),rescheduled=state.reschedules.some(r=>r.doctorId===doctor.id&&r.status==='pending'&&r.scheduledDate<=localISODate());
     let score=0;if(timing.state==='available')score+=100;else if(timing.state==='upcoming')score+=65;else if(timing.state==='scheduled')score+=30;else score-=35;
     if(due)score+=75;if(rescheduled)score+=85;score+=Math.min(55,Math.max(0,days));score+=Math.min(30,notMet*8);score+=complete.score/10;
@@ -247,7 +278,8 @@
     return score;
   }
   function intelligenceReasons(doctor){
-    const reasons=[],timing=doctorMeetingStatus(doctor),quality=doctorCompleteness(doctor),opportunity=productOpportunity(doctor),last=latestDoctorVisit(doctor.id,true),notMet=recentNotMetCount(doctor.id);
+    const reasons=[],access=doctorAccessForDate(doctor),timing=doctorMeetingStatus(doctor),quality=doctorCompleteness(doctor),opportunity=productOpportunity(doctor),last=latestDoctorVisit(doctor.id,true),notMet=recentNotMetCount(doctor.id);
+    if(access.fixed)reasons.push(`fixed appointment ${timeLabel(access.appointment.time)}`);else if(doctorClinicSystem(doctor)==='card_later')reasons.push('card given • later meeting ready');
     if(timing.state==='available')reasons.push('available now');else if(timing.state==='upcoming')reasons.push(timing.label.toLowerCase());else if(timing.state==='unset')reasons.push('meeting timing missing');
     if(doctor.nextFollowUp&&doctor.nextFollowUp<=localISODate())reasons.push('follow-up due');
     if(last){const gap=daysBetween(last.date,localISODate());if(gap>=14)reasons.push(`${gap} days since met`);}else reasons.push('no confirmed meeting history');
@@ -261,7 +293,7 @@
   }
   function replacementDoctor(excludeId){return smartPatchCandidates(20).find(x=>x.doctor.id!==excludeId&&['available','upcoming'].includes(x.timing.state))||smartPatchCandidates(20).find(x=>x.doctor.id!==excludeId)||null;}
   function dataQualitySummary(){
-    const missingHospital=state.doctors.filter(d=>!doctorHospital(d)).length,missingChemist=state.doctors.filter(d=>!linkedChemist(d)).length,missingTiming=state.doctors.filter(d=>!normalizeMeetingDays(d.meetingDays).length||!doctorMeetingSlots(d).length).length,missingGps=state.doctors.filter(d=>!num(d.latitude)||!num(d.longitude)).length;
+    const missingHospital=state.doctors.filter(d=>!doctorHospital(d)).length,missingChemist=state.doctors.filter(d=>!linkedChemist(d)).length,missingTiming=state.doctors.filter(d=>doctorClinicSystem(d)!=='appointment'&&(!normalizeMeetingDays(d.meetingDays).length||!doctorMeetingSlots(d).length)).length,missingGps=state.doctors.filter(d=>!num(d.latitude)||!num(d.longitude)).length;
     const keyCounts=new Map();state.doctors.forEach(d=>{const key=`${norm(d.name)}|${norm(doctorHospital(d))}`;if(norm(d.name))keyCounts.set(key,(keyCounts.get(key)||0)+1);});
     const duplicates=[...keyCounts.values()].filter(n=>n>1).reduce((a,n)=>a+n,0),complete=state.doctors.filter(d=>doctorCompleteness(d).score===100).length;
     return {complete,missingHospital,missingChemist,missingTiming,missingGps,duplicates,total:state.doctors.length};
@@ -319,6 +351,7 @@ function defaultSchemes() {
       sampleTransactions: [],
       tourPlans: [],
       appointments: [],
+      clinicActions: [],
       rcpa: [],
       salesMonths: [],
       opening: {monthKey: monthKey(today), calls:0, inputs:0, basket:0, towel:0, conversation:0, newAvailability:0, pobValue:0},
@@ -353,6 +386,7 @@ function defaultSchemes() {
       sampleTransactions: Array.isArray(raw?.sampleTransactions) ? raw.sampleTransactions : [],
       tourPlans: Array.isArray(raw?.tourPlans) ? raw.tourPlans : [],
       appointments: Array.isArray(raw?.appointments) ? raw.appointments : [],
+      clinicActions: Array.isArray(raw?.clinicActions) ? raw.clinicActions : [],
       rcpa: Array.isArray(raw?.rcpa) ? raw.rcpa : [],
       salesMonths: Array.isArray(raw?.salesMonths) ? raw.salesMonths : [],
       imports: Array.isArray(raw?.imports) ? raw.imports : []
@@ -372,6 +406,9 @@ function defaultSchemes() {
       if (d.chemistName) d.chemistName = cleanChemistName(d.chemistName);
       d.monthlyVisitTarget = Math.max(1,Math.min(4,Math.round(num(d.monthlyVisitTarget)||2)));
       d.minVisitGapDays = Math.max(0,Math.round(num(d.minVisitGapDays)||0));
+      const savedClinicSystem=clean(d.clinicSystem);
+      d.clinicSystem = ['direct','appointment','card_later'].includes(savedClinicSystem) ? savedClinicSystem : inferredLegacyClinicSystem(d);
+      d.cardDropTime = normalizeTime(d.cardDropTime)||(d.clinicSystem==='card_later'?legacyClockFromText(d.notes):'');
     });
     out.chemists.forEach(c => {
       if (!c.id) c.id = uid('ch');
@@ -406,6 +443,7 @@ function defaultSchemes() {
     out.sampleTransactions.forEach(x=>{if(!x.id)x.id=uid('smt');x.qty=num(x.qty);});
     out.tourPlans.forEach(x=>{if(!x.id)x.id=uid('tp');x.date=dateOnly(x.date||localISODate());x.area=clean(x.area);x.workType=clean(x.workType||'HQ');});
     out.appointments.forEach(x=>{if(!x.id)x.id=uid('apt');x.date=dateOnly(x.date||localISODate());x.time=normalizeTime(x.time);x.reminderDate=dateOnly(x.reminderDate||x.date||localISODate());x.reminderTime=normalizeTime(x.reminderTime);x.durationMinutes=Math.max(5,Math.min(60,Math.round(num(x.durationMinutes)||12)));x.status=clean(x.status||'Requested');x.shortDescription=clean(x.shortDescription||x.description||'');x.doctorId=clean(x.doctorId);const d=out.doctors.find(y=>y.id===x.doctorId);if(d){x.doctorName=d.name;x.hospital=doctorHospital(d);}else{x.doctorName=clean(x.doctorName);x.hospital=clean(x.hospital);}});
+    out.clinicActions.forEach(x=>{if(!x.id)x.id=uid('access');x.date=dateOnly(x.date||localISODate());x.doctorId=clean(x.doctorId);x.type=clean(x.type||'card_drop');x.completedAt=clean(x.completedAt);});
     out.rcpa.forEach(x=>{if(!x.id)x.id=uid('rcpa');x.rxQty=num(x.rxQty);});
     out.salesMonths.forEach(x=>{if(!x.id)x.id=uid('sale');x.month=clean(x.month||monthKey());x.target=num(x.target);x.primary=num(x.primary);x.secondary=num(x.secondary);x.collection=num(x.collection);});
     out.captures.forEach(c=>{
@@ -442,6 +480,7 @@ function defaultSchemes() {
   const nearbyPlaceCache = new Map();
   let proximityDismissedUntil = 0;
   let lastProximityDoctorId = '';
+  let lastFieldLocation = null;
 
   function saveState(render = true) {
     try {
@@ -577,7 +616,7 @@ function collectionCoverage(){
   const hospital=state.doctors.filter(d=>doctorHospital(d)).length;
   const address=state.doctors.filter(d=>d.address).length;
   const gps=state.doctors.filter(d=>d.latitude&&d.longitude).length;
-  const timing=state.doctors.filter(d=>doctorMeetingSlots(d).length&&normalizeMeetingDays(d.meetingDays).length).length;
+  const timing=state.doctors.filter(d=>doctorClinicSystem(d)==='appointment'||(doctorMeetingSlots(d).length&&normalizeMeetingDays(d.meetingDays).length)).length;
   const linked=state.doctors.filter(d=>linkedChemist(d)).length;
   const score=Math.round(((hospital+address+gps+timing+linked)/(total*5))*100);
   return {total:state.doctors.length,hospital,address,gps,timing,linked,score,distributors:state.distributors.length};
@@ -604,7 +643,7 @@ function todaySlot(doctor,at=now()){
 }
 function routeCandidates(lat,lng,includeVisited=false){
   const visited=new Set(rowsForDay().map(v=>v.doctorId).filter(Boolean));
-  const list=state.doctors.map(d=>({doctor:d,slot:todaySlot(d),eligibility:doctorEligibilityForDate(d)})).filter(x=>x.eligibility.eligible&&x.slot&&x.doctor.latitude&&x.doctor.longitude&&(includeVisited||!visited.has(x.doctor.id)));
+  const list=state.doctors.map(d=>{const access=doctorAccessForDate(d),slot=access.fixed?access.slots[0]:todaySlot(d);return {doctor:d,slot,access,eligibility:doctorEligibilityForDate(d)};}).filter(x=>(x.eligibility.eligible||x.access.fixed)&&x.access.ready&&x.slot&&x.doctor.latitude&&x.doctor.longitude&&(includeVisited||!visited.has(x.doctor.id)));
   const remaining=[...list],route=[];let pLat=num(lat),pLng=num(lng),clock=now().getHours()*60+now().getMinutes();
   while(remaining.length){
     const ranked=remaining.map(x=>{
@@ -625,7 +664,7 @@ function routeCandidates(lat,lng,includeVisited=false){
 function groupedHospitalRouteCandidates(lat,lng,includeVisited=false){
   const visited=new Set(rowsForDay().map(v=>v.doctorId).filter(Boolean)),groups=new Map();
   state.doctors.forEach(doctor=>{
-    const eligibility=doctorEligibilityForDate(doctor),appointment=appointmentForDoctorDate(doctor.id,localISODate(),true),slot=appointmentSlot(appointment)||todaySlot(doctor);if((!eligibility.eligible&&!appointment)||!slot||!num(doctor.latitude)||!num(doctor.longitude)||(visited.has(doctor.id)&&!includeVisited))return;
+    const eligibility=doctorEligibilityForDate(doctor),access=doctorAccessForDate(doctor),appointment=access.appointment||null,slot=access.fixed?access.slots[0]:todaySlot(doctor);if((!eligibility.eligible&&!access.fixed)||!access.ready||!slot||!num(doctor.latitude)||!num(doctor.longitude)||(visited.has(doctor.id)&&!includeVisited))return;
     const key=doctor.placeId?`place:${doctor.placeId}`:`gps:${num(doctor.latitude).toFixed(4)},${num(doctor.longitude).toFixed(4)}:${norm(doctorHospital(doctor))}`;
     if(!groups.has(key))groups.set(key,{key,type:'hospital',hospital:doctorHospital(doctor)||doctorDisplayName(doctor),address:doctor.address||doctor.area||'',latitude:num(doctor.latitude),longitude:num(doctor.longitude),doctors:[]});
     groups.get(key).doctors.push({doctor,slot});
@@ -736,6 +775,7 @@ function discoverNearbyHospitals(){
     if($('#todayPlanText'))$('#todayPlanText').textContent=tp?`${tp.workType||'HQ'} • ${tp.area||''}`:'Not set';
     if($('#todayAppointmentCount'))$('#todayAppointmentCount').textContent=String(todayAppointments.length);
     renderCallReminders();
+    renderNextCallPanel();
     if($('#salesProgressText'))$('#salesProgressText').textContent=sale?.target?`${salesPct}% • ₹${num(sale.secondary).toLocaleString('en-IN')}`:'Not set';
     const activities=rowsForDay(today).filter(v=>v.doctorId||v.chemistId).sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,6);
     $('#todayActivityList').innerHTML=activities.length?activities.map(miniActivity).join(''):empty('No meeting logged today. Tap + to start.');
@@ -746,7 +786,7 @@ function discoverNearbyHospitals(){
     $('#collectionProgressBar').style.width=`${Math.min(100,cov.score)}%`;
     $('#collectionProgressText').textContent=`${cov.score}% ready • ${cov.gps}/${cov.total} GPS • ${cov.timing}/${cov.total} timings • ${cov.linked}/${cov.total} chemist links`;
     $('#workflowModeBtn').textContent=mode==='collect'?'Switch to field work':'Back to data gathering';
-    const routeReady=state.doctors.filter(d=>doctorEligibilityForDate(d).eligible&&todaySlot(d)&&d.latitude&&d.longitude&&!rowsForDay().some(v=>v.doctorId===d.id)).length;
+    const routeReady=state.doctors.filter(d=>{const access=doctorAccessForDate(d);const slot=access.fixed?access.slots[0]:todaySlot(d);return (doctorEligibilityForDate(d).eligible||access.fixed)&&access.ready&&slot&&d.latitude&&d.longitude&&!rowsForDay().some(v=>v.doctorId===d.id);}).length;
     $('#nearbyReadyCount').textContent=state.doctors.filter(d=>doctorHospital(d)&&d.latitude&&d.longitude).length;
     $('#routeReadyCount').textContent=routeReady;
     $('#routeReadyText').textContent=routeReady?`${routeReady} unvisited doctors have saved timing + hospital GPS`:`Add doctor timing and verify hospital GPS once`;
@@ -780,6 +820,7 @@ function orderMiniCard(o){
     const topAreas=[...areaCounts.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,6).map(([a])=>a);
     const chips=[
       ['all','All'],
+      ['today_available','Today’s Available'],
       ['timing','Timing ✓'],
       ['no_timing','Timing missing'],
       ['type:PEDIA','Pedia'],
@@ -793,7 +834,8 @@ function orderMiniCard(o){
       const hay=[d.name,doctorHospital(d),d.address,area,d.hq,ch?.name,d.notes,type,...suggestedProductsForDoctor(d)].join(' ').toLowerCase();
       const matchQ=!q||hay.includes(q);
       let matchF=true;
-      if(doctorFilter==='available')matchF=doctorMeetingStatus(d).state==='available';
+      if(doctorFilter==='today_available')matchF=doctorTodayAvailability(d).available;
+      else if(doctorFilter==='available')matchF=doctorMeetingStatus(d).state==='available';
       else if(doctorFilter==='unlinked')matchF=!ch;
       else if(doctorFilter==='due')matchF=Boolean(d.nextFollowUp&&d.nextFollowUp<=localISODate());
       else if(doctorFilter==='timing')matchF=doctorHasTiming(d);
@@ -803,10 +845,14 @@ function orderMiniCard(o){
       return matchQ&&matchF;
     }).sort((a,b)=>{
       if(!q&&doctorFilter==='all'){const aa=inferDoctorArea(a),bb=inferDoctorArea(b);return aa.localeCompare(bb)||a.name.localeCompare(b.name);}
+      if(doctorFilter==='today_available'){
+        const rank=x=>{const s=doctorTodayAvailability(x);return s.state==='available'?0:s.state==='appointment'?1:s.state==='upcoming'?2:s.state==='card_task'?3:4;},ta=doctorTodayAvailability(a),tb=doctorTodayAvailability(b),sa=ta.slot?.start??9999,sb=tb.slot?.start??9999;
+        return rank(a)-rank(b)||sa-sb||inferDoctorArea(a).localeCompare(inferDoctorArea(b))||a.name.localeCompare(b.name);
+      }
       const rank=x=>doctorMeetingStatus(x).state==='available'?0:doctorMeetingStatus(x).state==='upcoming'?1:2;
       return rank(a)-rank(b)||a.name.localeCompare(b.name);
     });
-    $('#doctorSubtitle').textContent=`${list.length} of ${state.doctors.length} records • ${list.filter(doctorHasTiming).length} timing ready`;
+    $('#doctorSubtitle').textContent=doctorFilter==='today_available'?`${list.length} doctors available today • clinic access + remaining window checked`:`${list.length} of ${state.doctors.length} records • ${list.filter(doctorHasTiming).length} timing ready`;
     const visible=list.slice(0,doctorRenderLimit);
     if(!visible.length){$('#doctorList').innerHTML=empty('No matching doctors. Change filter or search.');return;}
     let html='';
@@ -845,15 +891,17 @@ function orderMiniCard(o){
     const subtitle=isDoctor?[ch?.name||'Chemist not linked',area].filter(Boolean).join(' • '):[`${linkedDoctorCount(r.id)} doctors`,area].filter(Boolean).join(' • ');
     const timing=isDoctor?doctorMeetingStatus(r):null;
     const tags=isDoctor?
-      [doctorVisitPolicy(r).label,r.needsCompletion&&'Needs completion',r.latitude&&'Clinic GPS',r.lastVisit&&`Last ${prettyDate(r.lastVisit)}`,r.nextFollowUp&&`Due ${prettyDate(r.nextFollowUp)}`].filter(Boolean):
+      [doctorClinicSystemLabel(r),doctorVisitPolicy(r).label,r.needsCompletion&&'Needs completion',r.latitude&&'Clinic GPS',r.lastVisit&&`Last ${prettyDate(r.lastVisit)}`,r.nextFollowUp&&`Due ${prettyDate(r.nextFollowUp)}`].filter(Boolean):
       [fb.prescribed&&`${fb.prescribed} prescribed`,fb.notPrescribed&&`${fb.notPrescribed} not prescribed`,r.latitude&&'Shop GPS'].filter(Boolean);
-    const timingTag=isDoctor?`<span class="tag timing ${timing.state==='available'?'good':timing.state==='unset'?'missing':''}">${esc(timing.state==='unset'?'Timing missing':timing.label)}</span>`:'';
+    const todayAvailability=isDoctor&&doctorFilter==='today_available'?doctorTodayAvailability(r):null;
+    const timingTag=isDoctor?`<span class="tag timing ${timing.state==='available'?'good':timing.state==='unset'?'missing':''}">${esc(doctorClinicSystem(r)==='appointment'?'Appointment access':doctorClinicSystem(r)==='card_later'?(cardDroppedForDate(r.id)?'Card given • meeting ready':`Card ${timeLabel(doctorCardDropTime(r))}`):(timing.state==='unset'?'Timing missing':timing.label))}</span>`:'';
+    const todayAvailabilityTag=isDoctor&&doctorFilter==='today_available'?`<span class="tag ${todayAvailability?.state==='available'?'good':''}">${esc(todayAvailability?.label||'Available today')}</span>`:'';
     const typeTag=isDoctor?`<span class="tag specialty">${esc(doctorKind)}</span>`:'';
     const productTags=isDoctor?products.slice(0,3).map(t=>`<span class="tag product-fit">${esc(t)}</span>`).join(''):'';
     const locationAction=map?`<a href="${map}" target="_blank" rel="noopener">Map</a>`:`<button data-action="edit-record" data-type="${type}" data-id="${r.id}">Location</button>`;
     const googleAction=isDoctor?`<a href="${googleDoctorSearchUrl(r)}" target="_blank" rel="noopener">Google</a>`:'';
     const actions=isDoctor?`${googleAction}${locationAction}<button class="primary-action" data-action="log-record" data-type="doctor" data-id="${r.id}">Call</button><button data-action="view-record" data-type="doctor" data-id="${r.id}">View</button>`:`${locationAction}<button class="primary-action" data-action="chemist-visit" data-id="${r.id}">Visit</button><button data-action="quick-rcpa" data-id="${r.id}">RCPA</button><button data-action="view-record" data-type="chemist" data-id="${r.id}">View</button>`;
-    return `<article class="record-card"><div class="record-top"><div class="avatar">${esc(initials(r.name))}</div><div class="record-title"><div class="title-line"><h3>${esc(isDoctor?doctorDisplayName(r):r.name)}</h3>${typeTag}</div><p>${esc(subtitle||'Details not added')}</p></div></div>${r.address?`<p class="record-note">${esc(r.address).slice(0,180)}</p>`:''}<div class="tag-row">${timingTag}${productTags}${tags.slice(0,2).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div><div class="record-actions ${isDoctor?'doctor-actions-four':'chemist-actions-four'}">${actions}</div></article>`;
+    return `<article class="record-card"><div class="record-top"><div class="avatar">${esc(initials(r.name))}</div><div class="record-title"><div class="title-line"><h3>${esc(isDoctor?doctorDisplayName(r):r.name)}</h3>${typeTag}</div><p>${esc(subtitle||'Details not added')}</p></div></div>${r.address?`<p class="record-note">${esc(r.address).slice(0,180)}</p>`:''}<div class="tag-row">${todayAvailabilityTag}${timingTag}${productTags}${tags.slice(0,2).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div><div class="record-actions ${isDoctor?'doctor-actions-four':'chemist-actions-four'}">${actions}</div></article>`;
   }
 
   function renderVisits() {
@@ -940,6 +988,38 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
 
   // ---- Doctor appointments / doctor-will-call reminders ----
   const APPOINTMENT_STATUSES=['Confirmed','Doctor will call','Requested','Tentative','Completed','Cancelled','Not available'];
+  const CLINIC_SYSTEM_LABELS={direct:'Direct timed meeting',appointment:'Appointment required',card_later:'Card drop → later meeting'};
+  function doctorClinicSystem(doctor){const value=clean(doctor?.clinicSystem);return ['direct','appointment','card_later'].includes(value)?value:'direct';}
+  function doctorClinicSystemLabel(doctor){return CLINIC_SYSTEM_LABELS[doctorClinicSystem(doctor)]||CLINIC_SYSTEM_LABELS.direct;}
+  function doctorCardDropTime(doctor){return normalizeTime(doctor?.cardDropTime)||'10:00';}
+  function cardDropActionForDate(doctorId,date=localISODate()){return state.clinicActions.find(x=>x.doctorId===doctorId&&x.type==='card_drop'&&dateOnly(x.date)===date)||null;}
+  function cardDroppedForDate(doctorId,date=localISODate()){return Boolean(cardDropActionForDate(doctorId,date));}
+  function markCardDropped(doctorId,date=localISODate()){
+    const d=doctorById(doctorId);if(!d)return;
+    let action=cardDropActionForDate(doctorId,date);
+    if(!action){action={id:uid('access'),doctorId,date,type:'card_drop',completedAt:new Date().toISOString(),createdAt:new Date().toISOString()};state.clinicActions.push(action);}
+    else action.completedAt=new Date().toISOString();
+    saveState();toast(`Card given to ${d.name}. Later meeting is now eligible.`);
+  }
+  function activeAppointmentForDoctor(doctorId){return upcomingAppointments().find(x=>x.doctorId===doctorId)||null;}
+  function doctorAccessForDate(doctor,date=localISODate()){
+    const system=doctorClinicSystem(doctor),confirmed=appointmentForDoctorDate(doctor.id,date,true),fixed=appointmentSlot(confirmed);
+    if(fixed)return {system,label:'Confirmed appointment',ready:true,slots:[fixed],appointment:confirmed,fixed:true};
+    if(system==='appointment'){
+      const pending=activeAppointmentForDoctor(doctor.id),status=pending?.status||'Appointment required';
+      return {system,label:status,ready:false,slots:[],appointment:pending||null,reason:status==='Doctor will call'?'Waiting for doctor call':status==='Requested'?'Appointment request pending':'Confirmed appointment required'};
+    }
+    const slots=doctorSlotsForDate(doctor,date);
+    if(system==='card_later'&&!cardDroppedForDate(doctor.id,date))return {system,label:'Card drop required',ready:false,slots:[],cardTask:true,cardDropTime:doctorCardDropTime(doctor),reason:`Give card around ${timeLabel(doctorCardDropTime(doctor))}, then meet in saved window`};
+    return {system,label:system==='card_later'?'Card given • meeting ready':'Direct meeting',ready:slots.length>0,slots,cardTask:false,reason:slots.length?'':'No usable meeting window for this day'};
+  }
+  function clinicAccessSummary(doctor,date=localISODate()){
+    const access=doctorAccessForDate(doctor,date);
+    if(access.fixed)return `Appointment ${timeLabel(access.appointment.time)}`;
+    if(access.system==='appointment')return access.label;
+    if(access.system==='card_later')return cardDroppedForDate(doctor.id,date)?`Card given • ${doctorMeetingTiming(doctor)||'meeting timing pending'}`:`Card ${timeLabel(doctorCardDropTime(doctor))} → ${doctorMeetingTiming(doctor)||'later meeting'}`;
+    return doctorMeetingTiming(doctor)||'Timing not set';
+  }
   function appointmentRank(status){return status==='Confirmed'?0:status==='Doctor will call'?1:status==='Tentative'?2:status==='Requested'?3:status==='Completed'?4:status==='Cancelled'?5:6;}
   function reminderStamp(x){
     const date=dateOnly(x?.reminderDate||x?.date),time=normalizeTime(x?.reminderTime);
@@ -989,7 +1069,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
     const syncMode=()=>{const st=status();fixed.classList.toggle('hidden',st==='Doctor will call');reminder.classList.toggle('hidden',st!=='Doctor will call');};
     const showHint=()=>{const d=doctorFromAppointmentInput(form.elements.doctorSearch.value);hint.textContent=d?[doctorType(d),doctorHospital(d),inferDoctorArea(d),doctorMeetingTiming(d),`Products: ${suggestedProductsForDoctor(d).join(', ')}`].filter(Boolean).join(' • '):'Doctor not matched yet. Keep typing an existing doctor/hospital.';};
     form.elements.doctorSearch.addEventListener('input',showHint);form.elements.doctorSearch.addEventListener('change',showHint);$$('input[name="status"]',form).forEach(x=>x.addEventListener('change',syncMode));syncMode();
-    form.addEventListener('submit',e=>{e.preventDefault();const fd=new FormData(form),d=doctorFromAppointmentInput(fd.get('doctorSearch')),st=status(),time=normalizeTime(fd.get('time')),reminderDate=dateOnly(fd.get('reminderDate')),reminderTime=normalizeTime(fd.get('reminderTime'));if(!d){toast('Select an existing doctor from search.');return;}if(st==='Confirmed'&&(!dateOnly(fd.get('date'))||!time)){toast('Appointment needs date and exact time.');return;}if(st==='Doctor will call'&&(!reminderDate||!reminderTime)){toast('Set reminder date and time while waiting for doctor call.');return;}const rec={...old,id:id||uid('apt'),doctorId:d.id,doctorName:d.name,hospital:doctorHospital(d),date:st==='Doctor will call'?(old.date||reminderDate):(dateOnly(fd.get('date'))||localISODate()),time:st==='Doctor will call'?'':time,reminderDate:st==='Doctor will call'?reminderDate:'',reminderTime:st==='Doctor will call'?reminderTime:'',durationMinutes:Math.max(5,Math.min(60,Math.round(num(fd.get('durationMinutes'))||12))),status:st,contactPerson:clean(fd.get('contactPerson')),shortDescription:clean(fd.get('shortDescription')),notes:clean(fd.get('notes')),updatedAt:new Date().toISOString()};if(id)Object.assign(old,rec);else{rec.createdAt=new Date().toISOString();state.appointments.push(rec);}saveState();closeSheet();toast(st==='Confirmed'?'Appointment fixed and added to Smart Plan.':st==='Doctor will call'?'Waiting for doctor call — reminder added on Home.':'Appointment request saved as pending.');});
+    form.addEventListener('submit',e=>{e.preventDefault();const fd=new FormData(form),d=doctorFromAppointmentInput(fd.get('doctorSearch')),st=status(),time=normalizeTime(fd.get('time')),reminderDate=dateOnly(fd.get('reminderDate')),reminderTime=normalizeTime(fd.get('reminderTime'));if(!d){toast('Select an existing doctor from search.');return;}if(st==='Confirmed'&&(!dateOnly(fd.get('date'))||!time)){toast('Appointment needs date and exact time.');return;}if(st==='Doctor will call'&&(!reminderDate||!reminderTime)){toast('Set reminder date and time while waiting for doctor call.');return;}d.clinicSystem='appointment';const rec={...old,id:id||uid('apt'),doctorId:d.id,doctorName:d.name,hospital:doctorHospital(d),date:st==='Doctor will call'?(old.date||reminderDate):(dateOnly(fd.get('date'))||localISODate()),time:st==='Doctor will call'?'':time,reminderDate:st==='Doctor will call'?reminderDate:'',reminderTime:st==='Doctor will call'?reminderTime:'',durationMinutes:Math.max(5,Math.min(60,Math.round(num(fd.get('durationMinutes'))||12))),status:st,contactPerson:clean(fd.get('contactPerson')),shortDescription:clean(fd.get('shortDescription')),notes:clean(fd.get('notes')),updatedAt:new Date().toISOString()};if(id)Object.assign(old,rec);else{rec.createdAt=new Date().toISOString();state.appointments.push(rec);}saveState();closeSheet();toast(st==='Confirmed'?'Appointment fixed and added to Smart Plan.':st==='Doctor will call'?'Waiting for doctor call — reminder added on Home.':'Appointment request saved as pending.');});
     $('#deleteAppointmentBtn')?.addEventListener('click',()=>{if(!confirm('Delete this appointment/reminder?'))return;state.appointments=state.appointments.filter(x=>x.id!==id);saveState();closeSheet();toast('Deleted.');});
   }
   function doctorCalledNow(id){
@@ -1049,23 +1129,25 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
   }
   function areaTimeDoctorMatches({date,area,from,to,includeVisited=false}){
     const start=timeMinutes(from),end=timeMinutes(to),key=norm(area),visited=new Set(rowsForDay(date).map(v=>v.doctorId).filter(Boolean));
-    if(start===null||end===null||end<start)return {rows:[],badWindow:true,missingTiming:0,notDue:0,outsideWindow:0,alreadyVisited:0,excluded:[]};
-    let missingTiming=0,notDue=0,outsideWindow=0,alreadyVisited=0;
-    const rows=[],excluded=[];
+    if(start===null||end===null||end<start)return {rows:[],badWindow:true,missingTiming:0,notDue:0,outsideWindow:0,alreadyVisited:0,accessPending:0,cardTasks:[],excluded:[]};
+    let missingTiming=0,notDue=0,outsideWindow=0,alreadyVisited=0,accessPending=0;
+    const rows=[],excluded=[],cardTasks=[];
     state.doctors.forEach(doctor=>{
       if(key&&!norm(doctorPlanSearchText(doctor)).includes(key))return;
-      const appointment=appointmentForDoctorDate(doctor.id,date,true),fixedSlot=appointmentSlot(appointment),eligibility=doctorEligibilityForDate(doctor,date);
+      const eligibility=doctorEligibilityForDate(doctor,date),access=doctorAccessForDate(doctor,date),fixedSlot=access.fixed?access.slots[0]:null;
       if(!eligibility.eligible&&!fixedSlot){notDue++;excluded.push({doctor,reason:`Monthly target/gap complete (${eligibility.count}/${eligibility.target})`});return;}
-      const slots=fixedSlot?[fixedSlot]:doctorSlotsForDate(doctor,date);
-      if(!slots.length){missingTiming++;excluded.push({doctor,reason:'No usable meeting timing or confirmed appointment for selected day'});return;}
       if(visited.has(doctor.id)&&!includeVisited){alreadyVisited++;excluded.push({doctor,reason:'Already called on selected date'});return;}
+      if(access.cardTask){accessPending++;cardTasks.push({doctor,time:access.cardDropTime,reason:access.reason,eligibility});excluded.push({doctor,reason:access.reason});return;}
+      if(!access.ready||!access.slots.length){accessPending++;const reason=access.reason||'Clinic access is not ready';excluded.push({doctor,reason});return;}
+      const slots=access.slots;
       const overlap=slots.filter(slot=>slot.start<=end&&slot.end>=start).sort((a,b)=>a.start-b.start)[0];
-      if(!overlap){outsideWindow++;excluded.push({doctor,reason:fixedSlot?`Confirmed appointment ${timeLabel(appointment.time)} is outside selected window`:`Meeting time outside ${timeLabel(from)}–${timeLabel(to)}`});return;}
+      if(!overlap){outsideWindow++;excluded.push({doctor,reason:access.fixed?`Confirmed appointment ${timeLabel(access.appointment.time)} is outside selected window`:`Meeting time outside ${timeLabel(from)}–${timeLabel(to)}`});return;}
       const due=Boolean(doctor.nextFollowUp&&doctor.nextFollowUp<=date),last=latestDoctorVisit(doctor.id,true),days=last?daysBetween(last.date,date):999;
-      rows.push({doctor,slot:overlap,appointment,visited:visited.has(doctor.id),due,last,days,chemist:linkedChemist(doctor),map:entityMapUrl(doctor),eligibility:{...eligibility,eligible:true,appointmentOverride:!!fixedSlot}});
+      rows.push({doctor,slot:overlap,appointment:access.appointment||null,access,visited:visited.has(doctor.id),due,last,days,chemist:linkedChemist(doctor),map:entityMapUrl(doctor),eligibility:{...eligibility,eligible:true,appointmentOverride:!!fixedSlot}});
     });
-    rows.sort((a,b)=>a.visited-b.visited||a.slot.start-b.slot.start||Number(b.due)-Number(a.due)||b.days-a.days||doctorDisplayName(a.doctor).localeCompare(doctorDisplayName(b.doctor)));
-    return {rows,badWindow:false,missingTiming,notDue,outsideWindow,alreadyVisited,excluded};
+    rows.sort((a,b)=>a.visited-b.visited||Number(Boolean(b.access?.fixed))-Number(Boolean(a.access?.fixed))||a.slot.start-b.slot.start||Number(b.due)-Number(a.due)||b.days-a.days||doctorDisplayName(a.doctor).localeCompare(doctorDisplayName(b.doctor)));
+    cardTasks.sort((a,b)=>(timeMinutes(a.time)??9999)-(timeMinutes(b.time)??9999)||doctorDisplayName(a.doctor).localeCompare(doctorDisplayName(b.doctor)));
+    return {rows,badWindow:false,missingTiming,notDue,outsideWindow,alreadyVisited,accessPending,cardTasks,excluded};
   }
   const SMART_VISIT_MINUTES=12;
   const SMART_ROAD_FACTOR=1.24;
@@ -1078,6 +1160,50 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
     const km=smartRoadKm(aLat,aLng,bLat,bLng);
     return Math.max(3,Math.round(km/22*60));
   }
+  function bestNextDoctorCandidates(latitude,longitude,at=now()){
+    const lat=num(latitude),lng=num(longitude);if(!lat||!lng)return [];
+    const date=localISODate(at),clock=at.getHours()*60+at.getMinutes(),visited=new Set(rowsForDay(date).map(v=>v.doctorId).filter(Boolean)),rows=[];
+    state.doctors.forEach(doctor=>{
+      if(visited.has(doctor.id)||!num(doctor.latitude)||!num(doctor.longitude))return;
+      const access=doctorAccessForDate(doctor,date),eligibility=doctorEligibilityForDate(doctor,date),fixed=Boolean(access.fixed);
+      if(!eligibility.eligible&&!fixed)return;
+      if(!access.ready||!access.slots.length)return;
+      const distance=smartRoadKm(lat,lng,doctor.latitude,doctor.longitude),travel=smartTravelMinutes(lat,lng,doctor.latitude,doctor.longitude);
+      let best=null;
+      access.slots.forEach(slot=>{
+        if(slot.end<clock)return;
+        const rawArrival=clock+travel,arrival=Math.max(rawArrival,slot.start),visitMinutes=slot.appointment?Math.max(5,slot.end-slot.start):SMART_VISIT_MINUTES,finish=arrival+visitMinutes;
+        if(finish>slot.end)return;
+        const wait=Math.max(0,slot.start-rawArrival),active=clock>=slot.start&&clock<=slot.end,closing=Math.max(0,slot.end-finish),appointmentSoon=slot.appointment&&slot.start-clock<=30;
+        const score=(active?0:120)+wait*2.2+distance*9+Math.min(90,closing)*0.08-(appointmentSoon?80:0)-(fixed?15:0);
+        const row={doctor,access,eligibility,slot,distance,travelMinutes:travel,arrivalMinutes:arrival,finishMinutes:finish,waitMinutes:wait,active,closingMinutes:closing,score};
+        if(!best||row.score<best.score)best=row;
+      });
+      if(best)rows.push(best);
+    });
+    return rows.sort((a,b)=>a.score-b.score||a.arrivalMinutes-b.arrivalMinutes||a.distance-b.distance);
+  }
+  function cardDropCandidates(latitude,longitude,at=now()){
+    const lat=num(latitude),lng=num(longitude),date=localISODate(at),clock=at.getHours()*60+at.getMinutes();if(!lat||!lng)return [];
+    return state.doctors.filter(d=>doctorClinicSystem(d)==='card_later'&&!cardDroppedForDate(d.id,date)&&num(d.latitude)&&num(d.longitude)&&doctorEligibilityForDate(d,date).eligible&&doctorSlotsForDate(d,date).length&&!rowsForDay(date).some(v=>v.doctorId===d.id)).map(d=>{const distance=smartRoadKm(lat,lng,d.latitude,d.longitude),travel=smartTravelMinutes(lat,lng,d.latitude,d.longitude),target=timeMinutes(doctorCardDropTime(d))??600,late=Math.max(0,clock-target);return {doctor:d,distance,travelMinutes:travel,targetMinutes:target,late,score:distance*10+Math.abs(clock-target)*0.25};}).sort((a,b)=>a.score-b.score||a.distance-b.distance);
+  }
+  function nextCallStateLabel(x,at=now()){
+    const clock=at.getHours()*60+at.getMinutes();
+    if(x.slot.appointment)return `Fixed appointment • ${timeLabel(x.slot.from)}`;
+    if(x.active)return `Available now • until ${timeLabel(x.slot.to)}`;
+    const mins=Math.max(0,x.slot.start-clock);return mins<=60?`Available in ${mins} min • ${timeLabel(x.slot.from)}–${timeLabel(x.slot.to)}`:`Today ${timeLabel(x.slot.from)}–${timeLabel(x.slot.to)}`;
+  }
+  function renderNextCallPanel(){
+    const panel=$('#nextCallPanel'),list=$('#nextCallList'),status=$('#nextCallStatus');if(!panel||!list||!status)return;
+    panel.classList.remove('hidden');
+    if(!lastFieldLocation){status.textContent='GPS needed to compare distance + time-window feasibility';list.innerHTML='<div class="next-call-empty">Fetching current GPS…</div>';return;}
+    const calls=bestNextDoctorCandidates(lastFieldLocation.latitude,lastFieldLocation.longitude).slice(0,3),cards=cardDropCandidates(lastFieldLocation.latitude,lastFieldLocation.longitude).slice(0,2);
+    status.textContent=calls.length?`${calls.length} feasible next call${calls.length===1?'':'s'} • ranked by access, timing and travel`:'No doctor call is reachable inside a valid window right now';
+    const callHtml=calls.map((x,i)=>{const d=x.doctor,products=suggestedProductsForDoctor(d).slice(0,3),meters=Math.round(x.distance*1000);return `<article class="next-call-card ${i===0?'best':''}"><div class="next-rank">${i===0?'BEST':i+1}</div><div class="next-call-copy"><div class="title-line"><strong>${esc(doctorDisplayName(d))}</strong><span class="specialty-pill">${esc(doctorType(d))}</span></div><small>${esc(inferDoctorArea(d))} • ${esc(doctorClinicSystemLabel(d))}</small><p><b>${esc(nextCallStateLabel(x))}</b> • ${meters<1000?`${esc(meters)} m`:`${esc(x.distance.toFixed(1))} km`} • ~${esc(x.travelMinutes)} min travel</p>${products.length?`<div class="tag-row">${products.map(p=>`<span class="tag product-fit">${esc(p)}</span>`).join('')}</div>`:''}</div><div class="next-call-actions"><button class="btn primary compact" data-action="start-next-call" data-id="${esc(d.id)}">Start call</button>${entityMapUrl(d)?`<a class="btn secondary compact" href="${entityMapUrl(d)}" target="_blank" rel="noopener">Map</a>`:''}</div></article>`;}).join('');
+    const cardHtml=cards.length?`<div class="access-task-head"><strong>Card-drop tasks</strong><small>Complete these before the later doctor window</small></div>${cards.map(x=>`<article class="next-call-card access"><div class="next-rank">CARD</div><div class="next-call-copy"><strong>${esc(doctorDisplayName(x.doctor))}</strong><small>${esc(inferDoctorArea(x.doctor))} • target ${esc(timeLabel(doctorCardDropTime(x.doctor)))}</small><p>${x.distance<1?`${esc(Math.round(x.distance*1000))} m`:`${esc(x.distance.toFixed(1))} km`} • later meet ${esc(doctorMeetingTiming(x.doctor)||'timing pending')}</p></div><div class="next-call-actions"><button class="btn secondary compact" data-action="mark-card-given" data-id="${esc(x.doctor.id)}">Card given ✓</button></div></article>`).join('')}`:'';
+    list.innerHTML=(callHtml||'<div class="next-call-empty">No feasible doctor meeting from current GPS/time.</div>')+cardHtml;
+  }
+  function updateFieldLocation(latitude,longitude,accuracy=0){const lat=num(latitude),lng=num(longitude),acc=num(accuracy);if(!lat||!lng)return;lastFieldLocation={latitude:lat,longitude:lng,accuracy:acc,capturedAt:new Date().toISOString()};if(activePage==='dashboard')renderNextCallPanel();}
   function smartBacktrackPenalty(route,pLat,pLng,cLat,cLng){
     if(route.length<2)return 0;
     const prev=route[route.length-2],aLat=num(prev.doctor.latitude),aLng=num(prev.doctor.longitude);
@@ -1167,7 +1293,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
     const box=$('#areaTimePlanResults');if(!box)return;
     const result=areaTimeDoctorMatches(values);
     if(result.badWindow){box.innerHTML='<div class="notice error">End time must be after start time.</div>';return;}
-    if(!result.rows.length){box.innerHTML=`${empty(`No due doctor matches ${values.area} for this date/time window.`)}${result.missingTiming?`<div class="notice">${esc(result.missingTiming)} doctor(s) have no usable meeting timing.</div>`:''}${result.outsideWindow?`<div class="notice">${esc(result.outsideWindow)} doctor(s) are outside the selected time window.</div>`:''}${result.notDue?`<div class="notice">${esc(result.notDue)} doctor(s) are already complete for monthly frequency/gap.</div>`:''}`;return;}
+    if(!result.rows.length){const cardHtml=result.cardTasks?.length?`<div class="detail-section"><h4>Card drop required first</h4>${result.cardTasks.map(x=>`<div class="ledger-row"><div class="copy"><strong>${esc(doctorDisplayName(x.doctor))}</strong><small>${esc(inferDoctorArea(x.doctor))} • Card around ${esc(timeLabel(x.time))} → meet later</small></div><div class="value"><button data-action="mark-card-given" data-id="${esc(x.doctor.id)}">Card given</button></div></div>`).join('')}</div>`:'';box.innerHTML=`${empty(`No due doctor meeting matches ${values.area} for this date/time window.`)}${cardHtml}${result.accessPending?`<div class="notice">${esc(result.accessPending)} doctor(s) need clinic access first (appointment/card drop).</div>`:''}${result.missingTiming?`<div class="notice">${esc(result.missingTiming)} doctor(s) have no usable meeting timing.</div>`:''}${result.outsideWindow?`<div class="notice">${esc(result.outsideWindow)} doctor(s) are outside the selected time window.</div>`:''}${result.notDue?`<div class="notice">${esc(result.notDue)} doctor(s) are already complete for monthly frequency/gap.</div>`:''}`;return;}
     const start=resolveSmartPlanStart(values.startSearch,values.startLat,values.startLng),planned=start?smartMonthlyRoute(result.rows,start.latitude,start.longitude,values.from,values.date):null,ordered=planned?.route?.length?planned.route:result.rows;
     const routeMeta=new Map((planned?.route||[]).map(x=>[x.doctor.id,x]));
     const fullGoogleUrl=start&&planned?.route?.length&&(planned?.legs||[]).length<=1?googleRouteUrl(start.latitude,start.longitude,planned.route):'';
@@ -1182,10 +1308,10 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
     }).join('');
     const legButtons=(planned?.legs||[]).length>1?(planned.legs||[]).map((leg,i)=>{const url=i===0&&start?googleRouteUrl(start.latitude,start.longitude,leg):googleRouteUrlCurrent(leg);return url?`<a class="btn ${i===0?'primary':'secondary'} full" href="${url}" target="_blank" rel="noopener">Open ${i===0?'main':'later'} leg ${i+1} in Maps</a>`:'';}).join(''):'';
     const routeExcluded=(planned?.unroutable||[]).map(x=>({doctor:x.doctor,reason:x.routeReason||'Could not fit route'}));
-    const allExcluded=[...routeExcluded,...(result.excluded||[])];
+    const cardTaskIds=new Set((result.cardTasks||[]).map(x=>x.doctor.id)),allExcluded=[...routeExcluded,...(result.excluded||[]).filter(x=>!cardTaskIds.has(x.doctor?.id))];
     const uniqueExcluded=[];const seenExcluded=new Set();allExcluded.forEach(x=>{const id=x.doctor?.id||`${x.reason}:${x.doctor?.name}`;if(!seenExcluded.has(id)){seenExcluded.add(id);uniqueExcluded.push(x);}});
     const excludedHtml=uniqueExcluded.length?`<div class="detail-section"><h4>Excluded / needs attention</h4>${uniqueExcluded.slice(0,12).map(x=>`<div class="ledger-row"><div class="copy"><strong>${esc(doctorDisplayName(x.doctor))}</strong><small>${esc(x.reason)}</small></div>${x.doctor?.id?`<div class="value"><button data-action="view-record" data-type="doctor" data-id="${esc(x.doctor.id)}">View</button></div>`:''}</div>`).join('')}${uniqueExcluded.length>12?`<div class="muted-line">+${esc(uniqueExcluded.length-12)} more excluded doctor(s)</div>`:''}</div>`:'';
-    box.innerHTML=`<div class="plan-result-head"><strong>${esc(ordered.length)} doctor${ordered.length===1?'':'s'} routed</strong><small>${esc(prettyDate(values.date))} • ${esc(timeLabel(values.from))}–${esc(timeLabel(values.to))} • ${esc(values.area)}</small></div>${start?`<div class="notice">Starts from <b>${esc(start.label)}</b>. Priority: confirmed appointments → monthly eligibility → meeting-window feasibility → urgent closing windows → low-backtracking nearby cluster. Each call reserves ${SMART_VISIT_MINUTES} min.</div>`:'<div class="notice">GPS/start point unavailable, so doctors are shown timing-wise. Fetch GPS or search a saved doctor/hospital to optimize distance.</div>'}${planned?`<div class="manager-summary"><div><small>ROUTED</small><strong>${esc(ordered.length)}</strong></div><div><small>APPROX ROAD</small><strong>${esc(totalKm)} km</strong></div><div><small>TRAVEL</small><strong>${esc(travelMin)} min</strong></div><div><small>FIELD WAIT</small><strong>${esc(waitMin)} min</strong></div>${idleGapMin?`<div><small>LATER GAP</small><strong>${esc(Math.floor(idleGapMin/60))}h ${esc(idleGapMin%60)}m</strong></div>`:''}</div><div class="muted-line">Road km/time are offline estimates for ordering; Google Maps calculates exact road geometry when opened.</div>`:''}<div class="area-time-plan-list">${rowsHtml}</div>${fullGoogleUrl?`<a class="btn primary full" href="${fullGoogleUrl}" target="_blank" rel="noopener">Open full planned order in Maps</a>`:''}${legButtons}${excludedHtml}`;
+    box.innerHTML=`<div class="plan-result-head"><strong>${esc(ordered.length)} doctor${ordered.length===1?'':'s'} routed</strong><small>${esc(prettyDate(values.date))} • ${esc(timeLabel(values.from))}–${esc(timeLabel(values.to))} • ${esc(values.area)}</small></div>${start?`<div class="notice">Starts from <b>${esc(start.label)}</b>. Priority: clinic access ready → confirmed appointments → monthly eligibility → meeting-window feasibility → travel ETA → urgent closing windows → low-backtracking nearby cluster. Each call reserves ${SMART_VISIT_MINUTES} min.</div>`:'<div class="notice">GPS/start point unavailable, so doctors are shown timing-wise. Fetch GPS or search a saved doctor/hospital to optimize distance.</div>'}${result.cardTasks?.length?`<div class="detail-section"><h4>Card drop before later meeting</h4>${result.cardTasks.map(x=>`<div class="ledger-row"><div class="copy"><strong>${esc(doctorDisplayName(x.doctor))}</strong><small>${esc(inferDoctorArea(x.doctor))} • ${esc(timeLabel(x.time))} card drop</small></div><div class="value"><button data-action="mark-card-given" data-id="${esc(x.doctor.id)}">Card given ✓</button></div></div>`).join('')}</div>`:''}${planned?`<div class="manager-summary"><div><small>ROUTED</small><strong>${esc(ordered.length)}</strong></div><div><small>APPROX ROAD</small><strong>${esc(totalKm)} km</strong></div><div><small>TRAVEL</small><strong>${esc(travelMin)} min</strong></div><div><small>FIELD WAIT</small><strong>${esc(waitMin)} min</strong></div>${idleGapMin?`<div><small>LATER GAP</small><strong>${esc(Math.floor(idleGapMin/60))}h ${esc(idleGapMin%60)}m</strong></div>`:''}</div><div class="muted-line">Road km/time are offline estimates for ordering; Google Maps calculates exact road geometry when opened.</div>`:''}<div class="area-time-plan-list">${rowsHtml}</div>${fullGoogleUrl?`<a class="btn primary full" href="${fullGoogleUrl}" target="_blank" rel="noopener">Open full planned order in Maps</a>`:''}${legButtons}${excludedHtml}`;
   }
   function areaTimeDoctorPlan(){
     const tp=latestTourPlan(),areas=[...new Set(state.doctors.flatMap(d=>[clean(d.area),clean(d.town),clean(d.hq)]).filter(Boolean))].sort((a,b)=>a.localeCompare(b)),starts=state.doctors.filter(d=>num(d.latitude)&&num(d.longitude)).slice().sort((a,b)=>doctorDisplayName(a).localeCompare(doctorDisplayName(b))),defaultArea=clean(tp?.area||state.profile.hq||areas[0]||''),current=now(),defaultFrom=`${pad(current.getHours())}:${current.getMinutes()<30?'00':'30'}`;
@@ -1218,8 +1344,8 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
   }
   function meetingSummaryHtml(doctor,chemist) {
     if(!doctor)return '<div class="meeting-summary muted-card">Search and choose a doctor. Stored chemist, address and meeting timing will appear here.</div>';
-    const map=entityMapUrl(doctor),timing=doctorMeetingStatus(doctor),fullTiming=doctorMeetingTiming(doctor);
-    return `<div class="meeting-summary"><div><small>DOCTOR / HOSPITAL</small><strong>${esc(doctorDisplayName(doctor))}</strong><p>${esc(doctor.address||doctor.area||'Address not added')}</p></div><div><small>UNDER CHEMIST</small><strong>${esc(chemist?.name||'Select once below')}</strong><p>${esc(chemist?.address||chemist?.area||'')}</p></div><div class="meeting-timing-cell ${esc(timing.state)}"><small>DOCTOR MEETING TIMING</small><strong>${esc(timing.label)}</strong><p>${esc(fullTiming||'Not set — edit doctor once to add days and time')}</p></div>${map?`<a href="${map}" target="_blank" rel="noopener">Open stored map</a>`:''}</div>`;
+    const map=entityMapUrl(doctor),timing=doctorMeetingStatus(doctor),fullTiming=doctorMeetingTiming(doctor),access=clinicAccessSummary(doctor);
+    return `<div class="meeting-summary"><div><small>DOCTOR / HOSPITAL</small><strong>${esc(doctorDisplayName(doctor))}</strong><p>${esc(doctor.address||doctor.area||'Address not added')}</p></div><div><small>UNDER CHEMIST</small><strong>${esc(chemist?.name||'Select once below')}</strong><p>${esc(chemist?.address||chemist?.area||'')}</p></div><div class="meeting-timing-cell ${esc(timing.state)}"><small>CLINIC ACCESS / MEETING</small><strong>${esc(doctorClinicSystemLabel(doctor))}</strong><p>${esc(access||fullTiming||timing.label)}</p></div>${map?`<a href="${map}" target="_blank" rel="noopener">Open stored map</a>`:''}</div>`;
   }
 
   function hideProximityCall(){
@@ -1228,15 +1354,18 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
   }
   function handleProximityLocation(latitude,longitude,accuracy=0){
     const banner=$('#proximityCallBanner');if(!banner||Date.now()<proximityDismissedUntil)return;
-    const lat=num(latitude),lng=num(longitude),acc=num(accuracy);
+    const lat=num(latitude),lng=num(longitude),acc=num(accuracy);updateFieldLocation(lat,lng,acc);
     if(!lat||!lng||(acc&&acc>80)){hideProximityCall();return;}
-    const visited=new Set(rowsForDay().filter(v=>v.doctorId).map(v=>v.doctorId));
-    const candidates=state.doctors.filter(d=>num(d.latitude)&&num(d.longitude)&&!visited.has(d.id)).map(d=>({doctor:d,meters:Math.round(haversineKm(lat,lng,num(d.latitude),num(d.longitude))*1000)})).filter(x=>x.meters<=50).sort((a,b)=>a.meters-b.meters);
-    if(!candidates.length){hideProximityCall();return;}
-    const hit=candidates[0],d=hit.doctor,products=suggestedProductsForDoctor(d).slice(0,2);
-    if(lastProximityDoctorId===d.id&&!banner.classList.contains('hidden'))return;
-    lastProximityDoctorId=d.id;
-    banner.innerHTML=`<div class="proximity-icon">◎</div><div class="proximity-copy"><small>YOU ARE AT A SAVED DOCTOR LOCATION • ${esc(hit.meters)} m</small><strong>${esc(doctorDisplayName(d))} <em>${esc(doctorType(d))}</em></strong><p>${esc([inferDoctorArea(d),doctorMeetingStatus(d).label,...products].filter(Boolean).join(' • '))}</p></div><div class="proximity-actions"><button class="btn primary compact" data-action="start-proximity-call" data-id="${esc(d.id)}">Start doctor call</button><button class="icon-btn" data-action="dismiss-proximity" aria-label="Dismiss">×</button></div>`;
+    const date=localISODate(),clock=now().getHours()*60+now().getMinutes(),visited=new Set(rowsForDay().filter(v=>v.doctorId).map(v=>v.doctorId));
+    const nearby=state.doctors.filter(d=>num(d.latitude)&&num(d.longitude)&&!visited.has(d.id)).map(d=>({doctor:d,meters:Math.round(haversineKm(lat,lng,num(d.latitude),num(d.longitude))*1000)})).filter(x=>x.meters<=50).sort((a,b)=>a.meters-b.meters);
+    let hit=null,action='';
+    for(const x of nearby){const d=x.doctor,access=doctorAccessForDate(d,date),elig=doctorEligibilityForDate(d,date);if(!elig.eligible&&!access.fixed)continue;if(access.cardTask){hit=x;action='card';break;}if(access.ready&&access.slots.some(s=>clock>=s.start&&clock<=s.end&&clock+SMART_VISIT_MINUTES<=s.end)){hit=x;action='call';break;}}
+    if(!hit){hideProximityCall();return;}
+    const d=hit.doctor,products=suggestedProductsForDoctor(d).slice(0,2);
+    if(lastProximityDoctorId===`${d.id}:${action}`&&!banner.classList.contains('hidden'))return;
+    lastProximityDoctorId=`${d.id}:${action}`;
+    const accessText=action==='card'?`Card drop due around ${timeLabel(doctorCardDropTime(d))}`:`Meeting window active • ${doctorMeetingStatus(d).label}`;
+    banner.innerHTML=`<div class="proximity-icon">◎</div><div class="proximity-copy"><small>YOU ARE AT A SAVED DOCTOR LOCATION • ${esc(hit.meters)} m</small><strong>${esc(doctorDisplayName(d))} <em>${esc(doctorType(d))}</em></strong><p>${esc([inferDoctorArea(d),accessText,...products].filter(Boolean).join(' • '))}</p></div><div class="proximity-actions">${action==='card'?`<button class="btn primary compact" data-action="mark-card-given" data-id="${esc(d.id)}">Card given ✓</button>`:`<button class="btn primary compact" data-action="start-proximity-call" data-id="${esc(d.id)}">Start doctor call</button>`}<button class="icon-btn" data-action="dismiss-proximity" aria-label="Dismiss">×</button></div>`;
     banner.classList.remove('hidden');
   }
   function requestProximityCheck(){
@@ -1245,7 +1374,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
   }
 
   window.__mrNativeLocation=(prefix,ok,latitude,longitude,acc,error)=>{
-    if(ok)handleProximityLocation(latitude,longitude,acc);
+    if(ok){updateFieldLocation(latitude,longitude,acc);handleProximityLocation(latitude,longitude,acc);}
     const status=$(`#${prefix}LocationStatus`),map=$(`#${prefix}LocationMap`),button=$(`#${prefix}FetchLocation`),lat=$(`#${prefix}Latitude`),lng=$(`#${prefix}Longitude`),accuracy=$(`#${prefix}Accuracy`),captured=$(`#${prefix}CapturedAt`);
     if(!status||!button){if(ok)document.dispatchEvent(new CustomEvent('mr-location-ready',{detail:{prefix,latitude,longitude,accuracy:acc}}));return;}
     if(ok){lat.value=latitude;lng.value=longitude;accuracy.value=Math.round(acc||0);captured.value=new Date().toISOString();status.textContent=`GPS ready • accuracy about ${Math.round(acc||0)} m`;status.className='location-status success';map.href=mapUrl(latitude,longitude);map.classList.remove('hidden');button.textContent='Refresh GPS';document.dispatchEvent(new CustomEvent('mr-location-ready',{detail:{prefix,latitude,longitude,accuracy:acc}}));}
@@ -1481,6 +1610,10 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
               <div id="meetingChemistResults" class="search-results lookup-results hidden"></div>
             </div>
           </div>
+          <div class="clinic-meeting-inline field-grid two">
+            <label><span>Clinic meeting system</span><select id="meetingClinicSystem" name="clinicSystem"><option value="direct" ${doctorClinicSystem(doctor)==='direct'?'selected':''}>Direct timed meeting</option><option value="appointment" ${doctorClinicSystem(doctor)==='appointment'?'selected':''}>Appointment required</option><option value="card_later" ${doctorClinicSystem(doctor)==='card_later'?'selected':''}>Card drop → meet later</option></select></label>
+            <label id="meetingCardDropField" class="${doctorClinicSystem(doctor)==='card_later'?'':'hidden'}"><span>Card drop time</span><input name="cardDropTime" type="time" value="${esc(doctorCardDropTime(doctor))}"></label>
+          </div>
           <div class="schedule-quick"><button type="button" id="meetingMonSatBtn">Mon–Sat</button><button type="button" id="meetingEveryDayBtn">Every day</button><button type="button" id="meetingMorningBtn">Morning 10–12</button><button type="button" id="meetingEveningBtn">Evening 5–8</button><button type="button" id="meetingBothBtn">Both</button><button type="button" id="meetingClearDaysBtn">Clear</button></div>
           <div id="meetingDaySelector" class="day-selector">${DAY_NAMES.map((day,i)=>`<label class="day-option"><input type="checkbox" name="meetingDays" value="${i}" ${normalizeMeetingDays(doctor?.meetingDays).includes(i)?'checked':''}><span>${day}</span></label>`).join('')}</div>
           <div class="field-grid two timing-grid">
@@ -1514,7 +1647,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
         <input name="date" type="hidden" value="${esc(localISODateTime())}">
         <div class="sticky-save"><button type="submit" class="btn primary full">Save meeting + 1 call</button></div>
       </form>`);
-    const form=$('#meetingForm'), doctorInput=$('#meetingDoctorSearch'), doctorIdInput=$('#meetingDoctorId'), doctorResults=$('#meetingDoctorResults'), chemistSelect=form.elements.chemistId, chemistInput=$('#meetingChemistSearch'), chemistResults=$('#meetingChemistResults'), orderDistributorSelect=form.elements.distributorId, hospitalInput=form.elements.hospital, timingPending=$('#meetingTimingPending');
+    const form=$('#meetingForm'), doctorInput=$('#meetingDoctorSearch'), doctorIdInput=$('#meetingDoctorId'), doctorResults=$('#meetingDoctorResults'), chemistSelect=form.elements.chemistId, chemistInput=$('#meetingChemistSearch'), chemistResults=$('#meetingChemistResults'), orderDistributorSelect=form.elements.distributorId, hospitalInput=form.elements.hospital, timingPending=$('#meetingTimingPending'), clinicSystemSelect=$('#meetingClinicSystem'), cardDropField=$('#meetingCardDropField');
     const doctorScore=(d,q)=>{
       if(!q)return d.lastVisit?20:0;
       const name=clean(d.name).toLowerCase(),hospital=doctorHospital(d).toLowerCase(),area=clean(d.area||d.hq).toLowerCase(),ch=clean(linkedChemist(d)?.name).toLowerCase();
@@ -1531,7 +1664,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
     };
     const showDoctorResults=()=>{
       const items=matchingDoctors(doctorInput.value);
-      doctorResults.innerHTML=items.length?items.map(d=>{const lc=linkedChemist(d),timing=doctorMeetingStatus(d);return `<button type="button" class="search-result doctor-search-result" data-meeting-doctor-id="${esc(d.id)}"><strong>${esc(doctorDisplayName(d))}</strong><small><span class="result-timing ${esc(timing.state)}">${esc(timing.label)}</span> • ${esc([lc?.name,d.area||d.hq,d.address].filter(Boolean).join(' • ')||'No extra details')}</small></button>`;}).join(''):`<div class="lookup-empty">No doctor or hospital found.</div>`;
+      doctorResults.innerHTML=items.length?items.map(d=>{const lc=linkedChemist(d),timing=doctorMeetingStatus(d),access=clinicAccessSummary(d);return `<button type="button" class="search-result doctor-search-result" data-meeting-doctor-id="${esc(d.id)}"><strong>${esc(doctorDisplayName(d))}</strong><small><span class="result-timing ${esc(timing.state)}">${esc(doctorClinicSystemLabel(d))}</span> • ${esc(access)} • ${esc([lc?.name,d.area||d.hq,d.address].filter(Boolean).join(' • ')||'No extra details')}</small></button>`;}).join(''):`<div class="lookup-empty">No doctor or hospital found.</div>`;
       doctorResults.classList.remove('hidden');
     };
     const chemistScore=(c,q)=>{
@@ -1545,9 +1678,16 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
     const selectedMeetingDays=()=>form.elements.meetingDays?[...form.elements.meetingDays].filter(x=>x.checked).map(x=>Number(x.value)):[];
     const setMeetingDays=days=>$$('input[name="meetingDays"]',form).forEach(x=>x.checked=days.includes(Number(x.value)));
     const setTimingDisabled=()=>{
-      const disabled=timingPending.checked;
+      const appointmentOnly=clinicSystemSelect?.value==='appointment',disabled=timingPending.checked||appointmentOnly;
       ['meetingFrom','meetingTo','meetingFrom2','meetingTo2'].forEach(name=>{form.elements[name].disabled=disabled;});
       $('#meetingDaySelector').classList.toggle('disabled',disabled);
+      $('.schedule-quick',form)?.classList.toggle('disabled',appointmentOnly);
+    };
+    const syncMeetingClinicSystem=()=>{
+      const system=clinicSystemSelect?.value||'direct';
+      cardDropField?.classList.toggle('hidden',system!=='card_later');
+      if(system==='appointment')timingPending.checked=true;
+      setTimingDisabled();
     };
     const fillMasterFields=d=>{
       hospitalInput.value=doctorHospital(d);
@@ -1556,12 +1696,14 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
       form.elements.meetingTo.value=normalizeTime(d?.meetingTo);
       form.elements.meetingFrom2.value=normalizeTime(d?.meetingFrom2);
       form.elements.meetingTo2.value=normalizeTime(d?.meetingTo2);
-      timingPending.checked=!(doctorMeetingSlots(d).length&&normalizeMeetingDays(d?.meetingDays).length);
-      setTimingDisabled();
+      clinicSystemSelect.value=doctorClinicSystem(d);
+      form.elements.cardDropTime.value=doctorCardDropTime(d);
+      timingPending.checked=doctorClinicSystem(d)==='appointment'||!(doctorMeetingSlots(d).length&&normalizeMeetingDays(d?.meetingDays).length);
+      syncMeetingClinicSystem();
     };
     const previewDoctor=()=>{
       const base=doctorById(doctorIdInput.value);if(!base)return null;
-      return {...base,hospital:clean(hospitalInput.value),meetingDays:selectedMeetingDays(),meetingFrom:normalizeTime(form.elements.meetingFrom.value),meetingTo:normalizeTime(form.elements.meetingTo.value),meetingFrom2:normalizeTime(form.elements.meetingFrom2.value),meetingTo2:normalizeTime(form.elements.meetingTo2.value)};
+      return {...base,hospital:clean(hospitalInput.value),clinicSystem:clinicSystemSelect?.value||doctorClinicSystem(base),cardDropTime:normalizeTime(form.elements.cardDropTime?.value)||doctorCardDropTime(base),meetingDays:selectedMeetingDays(),meetingFrom:normalizeTime(form.elements.meetingFrom.value),meetingTo:normalizeTime(form.elements.meetingTo.value),meetingFrom2:normalizeTime(form.elements.meetingFrom2.value),meetingTo2:normalizeTime(form.elements.meetingTo2.value)};
     };
     const refreshSummary=()=>{
       doctor=doctorById(doctorIdInput.value); chemist=chemistById(chemistSelect.value);
@@ -1618,9 +1760,10 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
     $('#meetingEveningBtn').addEventListener('click',()=>setPresetTimes('17:00','20:00'));
     $('#meetingBothBtn').addEventListener('click',()=>setPresetTimes('10:00','12:00','17:00','20:00'));
     $('#meetingClearDaysBtn').addEventListener('click',()=>{setMeetingDays([]);setPresetTimes('','','','');});
+    clinicSystemSelect?.addEventListener('change',()=>{syncMeetingClinicSystem();refreshSummary();refreshOutcomeIntelligence();});
     timingPending.addEventListener('change',()=>{setTimingDisabled();refreshSummary();refreshOutcomeIntelligence();});
     $$('input[name="meetingDays"], input[name="meetingFrom"], input[name="meetingTo"], input[name="meetingFrom2"], input[name="meetingTo2"]',form).forEach(x=>x.addEventListener('change',()=>{refreshSummary();refreshOutcomeIntelligence();}));
-    setTimingDisabled();
+    syncMeetingClinicSystem();
     bindStatusButtons($('#meetingProductRows'));
     const meetingSampleRoot=$('#meetingSampleRows');bindSampleIssueRows(meetingSampleRoot);
     $('#addMeetingSampleRow')?.addEventListener('click',()=>meetingSampleRoot.insertAdjacentHTML('beforeend',sampleIssueRow({},meetingSampleRoot.children.length)));
@@ -1636,9 +1779,10 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
       e.preventDefault();
       const fd=new FormData(form), d=doctorById(doctorIdInput.value), c=chemistById(fd.get('chemistId'));
       if(!d){toast('Search and choose a doctor or hospital.');doctorInput.focus();showDoctorResults();return;}
-      const hospital=clean(fd.get('hospital')),days=fd.getAll('meetingDays').map(Number),from=normalizeTime(fd.get('meetingFrom')),to=normalizeTime(fd.get('meetingTo')),from2=normalizeTime(fd.get('meetingFrom2')),to2=normalizeTime(fd.get('meetingTo2')),isTimingPending=fd.get('timingPending')==='on';
+      const hospital=clean(fd.get('hospital')),clinicSystem=clean(fd.get('clinicSystem'))||'direct',cardDropTime=normalizeTime(fd.get('cardDropTime')),days=fd.getAll('meetingDays').map(Number),from=normalizeTime(fd.get('meetingFrom')),to=normalizeTime(fd.get('meetingTo')),from2=normalizeTime(fd.get('meetingFrom2')),to2=normalizeTime(fd.get('meetingTo2')),isTimingPending=fd.get('timingPending')==='on'||clinicSystem==='appointment';
       if(!hospital){toast('Enter hospital or clinic name.');hospitalInput.focus();return;}
       if(!c){toast('Type and select the pharmacy / chemist under this doctor.');chemistInput.focus();showChemistResults();return;}
+      if(clinicSystem==='card_later'&&!cardDropTime){toast('Add card drop time for this clinic system.');return;}
       if(!isTimingPending){
         if(!days.length){toast('Choose doctor meeting day(s), or mark timing not confirmed.');return;}
         if(!from||!to){toast('Add the first doctor meeting From and To time.');return;}
@@ -1656,7 +1800,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
       if(orderPlaced&&!distributor){toast('Select distributor for the order.');return;}
       if(orderPlaced&&!orderItems.length){toast('Add at least one ordered product.');return;}
       if(sampleError){toast(sampleError);return;}
-      const meetingDoctor={...d,hospital,meetingDays:days,meetingFrom:from,meetingTo:to,meetingFrom2:from2,meetingTo2:to2},nextSuggested=NOT_MET_OUTCOMES.has(outcome)?nextMeetingOccurrence(meetingDoctor,now(),true):null,replacement=NOT_MET_OUTCOMES.has(outcome)?replacementDoctor(d.id):null,autoFollowUp=clean(fd.get('followUpDate'))||(nextSuggested?.date||'');
+      const meetingDoctor={...d,hospital,clinicSystem,cardDropTime,meetingDays:days,meetingFrom:from,meetingTo:to,meetingFrom2:from2,meetingTo2:to2},nextSuggested=NOT_MET_OUTCOMES.has(outcome)?nextMeetingOccurrence(meetingDoctor,now(),true):null,replacement=NOT_MET_OUTCOMES.has(outcome)?replacementDoctor(d.id):null,autoFollowUp=clean(fd.get('followUpDate'))||(nextSuggested?.date||'');
       const row={
         id:uid('log'),date:fd.get('date')||localISODateTime(),entityType:'doctor',entityId:d.id,entityName:d.name,
         doctorId:d.id,doctorName:d.name,doctorHospital:hospital,chemistId:c?.id||'',chemistName:c?.name||'',productStatuses,
@@ -1669,7 +1813,8 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
       if(outcome==='met')completeAppointmentsForVisit(d.id,dateOnly(row.date));
       if(sampleIssues.length)commitSampleIssues(sampleIssues,{date:row.date,doctor:d,chemist:c,visitId:row.id,notes:'Doctor visit distribution'});
       if(orderPlaced){const order={id:uid('ord'),date:row.date,doctorId:d.id,doctorName:d.name,doctorHospital:hospital,chemistId:c?.id||'',chemistName:c?.name||'',distributorId:distributor.id,distributorName:distributor.name,items:orderItems,totalValue:row.pobValue,status:'placed',notes:clean(fd.get('orderNote')),visitId:row.id,latitude:row.latitude,longitude:row.longitude,createdAt:new Date().toISOString()};state.orders.push(order);row.orderId=order.id;if(c){c.linkedDistributorId=distributor.id;c.distributorName=distributor.name;}distributor.lastOrderDate=String(row.date).slice(0,10);}
-      d.hospital=hospital;
+      d.hospital=hospital;d.clinicSystem=clinicSystem;d.cardDropTime=clinicSystem==='card_later'?cardDropTime:'';
+      if(outcome==='met'&&clinicSystem==='card_later'&&!cardDroppedForDate(d.id,dateOnly(row.date))){state.clinicActions.push({id:uid('clinic'),date:dateOnly(row.date),doctorId:d.id,type:'card_drop',completedAt:new Date().toISOString(),source:'Meeting logged'});}
       if(!isTimingPending){d.meetingDays=days;d.meetingFrom=from;d.meetingTo=to;d.meetingFrom2=from2;d.meetingTo2=to2;}
       d.lastAttempt=String(row.date).slice(0,10);if(outcome==='met')d.lastVisit=d.lastAttempt;d.updatedAt=new Date().toISOString();
       if(c){d.linkedChemistId=c.id;d.chemistName=c.name;if(outcome==='met')c.lastVisit=d.lastAttempt;c.updatedAt=new Date().toISOString();}
@@ -1678,7 +1823,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
       if(NOT_MET_OUTCOMES.has(outcome)){state.reschedules.filter(r=>r.doctorId===d.id&&r.status==='pending').forEach(r=>r.status='replaced');state.reschedules.push({id:uid('res'),doctorId:d.id,doctorName:d.name,hospital:doctorHospital(d),sourceVisitId:row.id,reason:notMetReason||OUTCOME_LABELS[outcome],createdAt:new Date().toISOString(),scheduledDate:nextSuggested?.date||row.followUpDate||'',scheduledDateTime:nextSuggested?.dateTime||'',meetingFrom:nextSuggested?.from||'',meetingTo:nextSuggested?.to||'',replacementDoctorId:replacement?.doctor.id||'',replacementDoctorName:replacement?doctorDisplayName(replacement.doctor):'',status:'pending'});}
       else state.reschedules.filter(r=>r.doctorId===d.id&&r.status==='pending').forEach(r=>r.status='completed');
       state.intelligenceLog.push({id:uid('intel'),date:new Date().toISOString(),doctorId:d.id,doctorName:d.name,outcome,action:row.intelligenceAction});
-      d.needsCompletion=!(doctorHospital(d)&&linkedChemist(d)&&d.latitude&&d.longitude&&doctorMeetingSlots(d).length&&normalizeMeetingDays(d.meetingDays).length);
+      d.needsCompletion=!(doctorHospital(d)&&linkedChemist(d)&&d.latitude&&d.longitude&&(doctorClinicSystem(d)==='appointment'||(doctorMeetingSlots(d).length&&normalizeMeetingDays(d.meetingDays).length))&&(doctorClinicSystem(d)!=='card_later'||doctorCardDropTime(d)));
       saveState();closeSheet();toast(NOT_MET_OUTCOMES.has(outcome)?`Not met saved. ${nextSuggested?`Moved to ${nextSuggested.label}.`: 'Timing required.'}${replacement?` Replacement: ${replacement.doctor.name}.`:''}`:(d.needsCompletion?'Meeting saved. Missing master details remain marked pending.':'Meeting saved. Doctor master and report updated.'));
     });
   }
@@ -1703,24 +1848,26 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
   }
   function quickCompleteDoctor(){
     const hospitals=[...new Set(state.doctors.map(doctorHospital).filter(Boolean))].sort((a,b)=>a.localeCompare(b)),areas=[...new Set(state.doctors.flatMap(d=>[clean(d.area),clean(d.town),clean(d.hq)]).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
-    openSheet('Quick Doctor Details','Search existing doctor, fill only what you know. GPS starts automatically and nearby saved hospitals are suggested.',`<form id="quickDoctorForm" class="sheet-form"><div class="lookup-label field-block"><span class="field-caption">Find doctor</span><div class="lookup-field"><input id="quickDoctorSearch" type="search" autocomplete="off" placeholder="Type doctor / hospital / area…"><input id="quickDoctorId" name="doctorId" type="hidden"><div id="quickDoctorResults" class="search-results lookup-results hidden"></div></div></div><div id="quickDoctorSelected" class="notice">Select a doctor to complete details.</div><label><span>Find hospital / clinic</span><input id="quickHospital" name="hospital" type="search" list="quickHospitalList" placeholder="Type hospital"><datalist id="quickHospitalList">${hospitals.map(x=>`<option value="${esc(x)}"></option>`).join('')}</datalist></label><label><span>Find area / place</span><input id="quickArea" name="area" type="search" list="quickAreaList" placeholder="Type area"><datalist id="quickAreaList">${areas.map(x=>`<option value="${esc(x)}"></option>`).join('')}</datalist></label><label><span>Address</span><textarea id="quickAddress" name="address" rows="2" placeholder="Clinic address if known"></textarea></label><div class="lookup-label field-block"><span class="field-caption">Find chemist under doctor</span><div class="lookup-field"><input id="quickChemistSearch" type="search" autocomplete="off" placeholder="Type chemist / area…"><input id="quickChemistId" name="linkedChemistId" type="hidden"><div id="quickChemistResults" class="search-results lookup-results hidden"></div></div></div><div class="schedule-card"><div class="form-section-title"><h3>Monthly visit rule</h3><p>Planner uses this before suggesting the doctor.</p></div><label><span>Find / choose frequency</span><input id="quickFrequency" name="monthlyVisitTargetText" type="search" list="quickFrequencyList" value="2× / month"><datalist id="quickFrequencyList"><option value="1× / month"></option><option value="2× / month"></option><option value="3× / month"></option><option value="4× / month"></option></datalist></label><label><span>Minimum gap days (0 = automatic)</span><input id="quickGap" name="minVisitGapDays" type="number" min="0" max="31" step="1" value="0"></label></div><div class="schedule-card"><div class="form-section-title"><h3>Meeting timing</h3><p>Search preset or set exact days/time.</p></div><label><span>Find timing preset</span><input id="quickTimingPreset" type="search" list="quickTimingPresets" placeholder="Morning / Lunch / Evening"><datalist id="quickTimingPresets"><option value="Morning 10–12"></option><option value="Lunch 12–2"></option><option value="Afternoon 2–5"></option><option value="Evening 5–8"></option><option value="Morning + Evening"></option></datalist></label><div class="schedule-quick"><button type="button" id="quickMonSat">Mon–Sat</button><button type="button" id="quickEveryDay">Every day</button><button type="button" id="quickClearDays">Clear days</button></div><div class="day-selector" id="quickDaySelector">${DAY_NAMES.map((day,i)=>`<label class="day-option"><input type="checkbox" name="meetingDays" value="${i}"><span>${day}</span></label>`).join('')}</div><div class="field-grid two timing-grid"><label><span>From</span><input name="meetingFrom" type="time"></label><label><span>To</span><input name="meetingTo" type="time"></label><label><span>Second from</span><input name="meetingFrom2" type="time"></label><label><span>Second to</span><input name="meetingTo2" type="time"></label></div></div><div class="location-card"><div class="location-head"><div><strong>Automatic nearby GPS</strong><small id="quickdocLocationStatus" class="location-status">Fetching automatically…</small></div><button type="button" id="quickdocFetchLocation" class="btn secondary compact">Refresh GPS</button></div><a id="quickdocLocationMap" class="hidden" target="_blank" rel="noopener">View current map</a><input id="quickdocLatitude" type="hidden"><input id="quickdocLongitude" type="hidden"><input id="quickdocAccuracy" type="hidden"><input id="quickdocCapturedAt" type="hidden"><label class="toggle-line"><input id="quickUseGps" type="checkbox" checked> Save current GPS as this doctor/hospital location</label></div><div class="detail-section"><h4>Nearby saved hospitals / doctors</h4><div id="quickNearbyResults">Waiting for GPS…</div></div><div class="sticky-save"><button class="btn primary full" type="submit">Save doctor details</button></div></form>`);
+    openSheet('Quick Doctor Details','Search existing doctor, fill only what you know. GPS starts automatically and nearby saved hospitals are suggested.',`<form id="quickDoctorForm" class="sheet-form"><div class="lookup-label field-block"><span class="field-caption">Find doctor</span><div class="lookup-field"><input id="quickDoctorSearch" type="search" autocomplete="off" placeholder="Type doctor / hospital / area…"><input id="quickDoctorId" name="doctorId" type="hidden"><div id="quickDoctorResults" class="search-results lookup-results hidden"></div></div></div><div id="quickDoctorSelected" class="notice">Select a doctor to complete details.</div><label><span>Find hospital / clinic</span><input id="quickHospital" name="hospital" type="search" list="quickHospitalList" placeholder="Type hospital"><datalist id="quickHospitalList">${hospitals.map(x=>`<option value="${esc(x)}"></option>`).join('')}</datalist></label><label><span>Find area / place</span><input id="quickArea" name="area" type="search" list="quickAreaList" placeholder="Type area"><datalist id="quickAreaList">${areas.map(x=>`<option value="${esc(x)}"></option>`).join('')}</datalist></label><label><span>Address</span><textarea id="quickAddress" name="address" rows="2" placeholder="Clinic address if known"></textarea></label><div class="lookup-label field-block"><span class="field-caption">Find chemist under doctor</span><div class="lookup-field"><input id="quickChemistSearch" type="search" autocomplete="off" placeholder="Type chemist / area…"><input id="quickChemistId" name="linkedChemistId" type="hidden"><div id="quickChemistResults" class="search-results lookup-results hidden"></div></div></div><div class="schedule-card"><div class="form-section-title"><h3>Monthly visit rule</h3><p>Planner uses this before suggesting the doctor.</p></div><label><span>Find / choose frequency</span><input id="quickFrequency" name="monthlyVisitTargetText" type="search" list="quickFrequencyList" value="2× / month"><datalist id="quickFrequencyList"><option value="1× / month"></option><option value="2× / month"></option><option value="3× / month"></option><option value="4× / month"></option></datalist></label><label><span>Minimum gap days (0 = automatic)</span><input id="quickGap" name="minVisitGapDays" type="number" min="0" max="31" step="1" value="0"></label></div><div class="schedule-card clinic-system-card"><div class="form-section-title"><h3>Clinic meeting system</h3><p>Choose how this clinic actually allows MR meetings.</p></div><label><span>Clinic system</span><select id="quickClinicSystem" name="clinicSystem"><option value="direct">Direct meeting in saved days/time</option><option value="appointment">Appointment required</option><option value="card_later">Card drop first → later meeting</option></select></label><div id="quickCardDropFields" class="field-grid two hidden"><label><span>Card drop time</span><input name="cardDropTime" type="time" value="10:00"></label><div class="notice">After Card given ✓, doctor becomes eligible in the saved later meeting window.</div></div></div><div id="quickMeetingTimingCard" class="schedule-card"><div class="form-section-title"><h3>Meeting timing</h3><p>Direct/card-later: set exact days and time. Appointment: fixed time comes from Appointments.</p></div><label><span>Find timing preset</span><input id="quickTimingPreset" type="search" list="quickTimingPresets" placeholder="Morning / Lunch / Evening"><datalist id="quickTimingPresets"><option value="Morning 10–12"></option><option value="Lunch 12–2"></option><option value="Afternoon 2–5"></option><option value="Evening 5–8"></option><option value="Morning + Evening"></option></datalist></label><div class="schedule-quick"><button type="button" id="quickMonSat">Mon–Sat</button><button type="button" id="quickEveryDay">Every day</button><button type="button" id="quickClearDays">Clear days</button></div><div class="day-selector" id="quickDaySelector">${DAY_NAMES.map((day,i)=>`<label class="day-option"><input type="checkbox" name="meetingDays" value="${i}"><span>${day}</span></label>`).join('')}</div><div class="field-grid two timing-grid"><label><span>From</span><input name="meetingFrom" type="time"></label><label><span>To</span><input name="meetingTo" type="time"></label><label><span>Second from</span><input name="meetingFrom2" type="time"></label><label><span>Second to</span><input name="meetingTo2" type="time"></label></div></div><div class="location-card"><div class="location-head"><div><strong>Automatic nearby GPS</strong><small id="quickdocLocationStatus" class="location-status">Fetching automatically…</small></div><button type="button" id="quickdocFetchLocation" class="btn secondary compact">Refresh GPS</button></div><a id="quickdocLocationMap" class="hidden" target="_blank" rel="noopener">View current map</a><input id="quickdocLatitude" type="hidden"><input id="quickdocLongitude" type="hidden"><input id="quickdocAccuracy" type="hidden"><input id="quickdocCapturedAt" type="hidden"><label class="toggle-line"><input id="quickUseGps" type="checkbox" checked> Save current GPS as this doctor/hospital location</label></div><div class="detail-section"><h4>Nearby saved hospitals / doctors</h4><div id="quickNearbyResults">Waiting for GPS…</div></div><div class="sticky-save"><button class="btn primary full" type="submit">Save doctor details</button></div></form>`);
     const form=$('#quickDoctorForm'),doctorSearch=$('#quickDoctorSearch'),doctorId=$('#quickDoctorId'),doctorResults=$('#quickDoctorResults'),chemistSearch=$('#quickChemistSearch'),chemistId=$('#quickChemistId'),chemistResults=$('#quickChemistResults');
     const selectedDays=()=>form.elements.meetingDays?[...form.elements.meetingDays].filter(x=>x.checked).map(x=>Number(x.value)):[];
     const setDays=days=>$$('input[name="meetingDays"]',form).forEach(x=>x.checked=days.includes(Number(x.value)));
     const setTimes=(a,b,c='',d='')=>{form.elements.meetingFrom.value=a;form.elements.meetingTo.value=b;form.elements.meetingFrom2.value=c;form.elements.meetingTo2.value=d;};
+    const syncQuickClinicSystem=()=>{const system=$('#quickClinicSystem').value;$('#quickCardDropFields').classList.toggle('hidden',system!=='card_later');$('#quickMeetingTimingCard').classList.toggle('appointment-mode-muted',system==='appointment');};
     const frequencyText=n=>`${Math.max(1,Math.min(4,Math.round(num(n)||2)))}× / month`;
     const parseFrequency=v=>{const m=clean(v).match(/[1-4]/);return m?Number(m[0]):2;};
     const showDoctors=()=>{const items=quickDoctorSearchMatches(doctorSearch.value);doctorResults.innerHTML=items.length?items.map(d=>`<button type="button" class="search-result" data-quick-doctor-id="${esc(d.id)}"><strong>${esc(doctorDisplayName(d))} <em class="inline-specialty">${esc(doctorType(d))}</em></strong><small>${esc([inferDoctorArea(d)||d.hq,doctorMeetingTiming(d)||'Timing pending',suggestedProductsForDoctor(d).slice(0,2).join(', '),doctorVisitPolicy(d).label].filter(Boolean).join(' • '))}</small></button>`).join(''):`<div class="lookup-empty">No doctor found.</div>`;doctorResults.classList.remove('hidden');};
     const showChemists=()=>{const items=quickChemistSearchMatches(chemistSearch.value);chemistResults.innerHTML=items.length?items.map(c=>`<button type="button" class="search-result" data-quick-chemist-id="${esc(c.id)}"><strong>${esc(c.name)}</strong><small>${esc([c.area||c.hq,c.address].filter(Boolean).join(' • ')||'No address')}</small></button>`).join(''):`<div class="lookup-empty">No chemist found.</div>`;chemistResults.classList.remove('hidden');};
-    const loadDoctor=d=>{if(!d)return;doctorId.value=d.id;doctorSearch.value=doctorDisplayName(d);doctorResults.classList.add('hidden');$('#quickDoctorSelected').innerHTML=`<b>${esc(doctorDisplayName(d))}</b> • ${esc(doctorType(d))} • ${esc(doctorEligibilityForDate(d).reason)} • ${esc(suggestedProductsForDoctor(d).slice(0,3).join(', '))}`;$('#quickHospital').value=doctorHospital(d);$('#quickArea').value=inferDoctorArea(d)||d.hq||'';$('#quickAddress').value=d.address||d.hospitalAddress||'';const c=linkedChemist(d);chemistId.value=c?.id||'';chemistSearch.value=c?.name||'';$('#quickFrequency').value=frequencyText(d.monthlyVisitTarget);$('#quickGap').value=num(d.minVisitGapDays)||0;setDays(normalizeMeetingDays(d.meetingDays));setTimes(normalizeTime(d.meetingFrom),normalizeTime(d.meetingTo),normalizeTime(d.meetingFrom2),normalizeTime(d.meetingTo2));};
+    const loadDoctor=d=>{if(!d)return;doctorId.value=d.id;doctorSearch.value=doctorDisplayName(d);doctorResults.classList.add('hidden');$('#quickDoctorSelected').innerHTML=`<b>${esc(doctorDisplayName(d))}</b> • ${esc(doctorType(d))} • ${esc(doctorEligibilityForDate(d).reason)} • ${esc(suggestedProductsForDoctor(d).slice(0,3).join(', '))}`;$('#quickHospital').value=doctorHospital(d);$('#quickArea').value=inferDoctorArea(d)||d.hq||'';$('#quickAddress').value=d.address||d.hospitalAddress||'';const c=linkedChemist(d);chemistId.value=c?.id||'';chemistSearch.value=c?.name||'';$('#quickFrequency').value=frequencyText(d.monthlyVisitTarget);$('#quickGap').value=num(d.minVisitGapDays)||0;setDays(normalizeMeetingDays(d.meetingDays));setTimes(normalizeTime(d.meetingFrom),normalizeTime(d.meetingTo),normalizeTime(d.meetingFrom2),normalizeTime(d.meetingTo2));$('#quickClinicSystem').value=doctorClinicSystem(d);form.elements.cardDropTime.value=doctorCardDropTime(d);syncQuickClinicSystem();};
     const renderNearby=(lat,lng)=>{const out=$('#quickNearbyResults'),groups=savedHospitalGroups(lat,lng,2000).slice(0,12);out.innerHTML=groups.length?groups.map(g=>{const d=(g.doctorIds||[]).map(doctorById).filter(Boolean)[0];return `<button type="button" class="nearby-place-card plain-button" data-quick-nearby-doctor="${esc(d?.id||'')}"><div class="nearby-place-distance">${esc(g.distanceKm.toFixed(2))}<small>km</small></div><div class="nearby-place-copy"><h3>${esc(g.name)}</h3><p>${esc(g.address||'')}</p><small>${esc((g.doctorIds||[]).length)} saved doctor(s)</small></div></button>`;}).join(''):empty('No saved hospital within 2 km. Current GPS can still be saved to the selected doctor.');};
     doctorSearch.addEventListener('focus',showDoctors);doctorSearch.addEventListener('input',()=>{doctorId.value='';showDoctors();});doctorResults.addEventListener('click',e=>{const b=e.target.closest('[data-quick-doctor-id]');if(b)loadDoctor(doctorById(b.dataset.quickDoctorId));});
     chemistSearch.addEventListener('focus',showChemists);chemistSearch.addEventListener('input',()=>{chemistId.value='';showChemists();});chemistResults.addEventListener('click',e=>{const b=e.target.closest('[data-quick-chemist-id]');if(!b)return;const c=chemistById(b.dataset.quickChemistId);if(c){chemistId.value=c.id;chemistSearch.value=c.name;chemistResults.classList.add('hidden');}});
+    $('#quickClinicSystem').addEventListener('change',syncQuickClinicSystem);syncQuickClinicSystem();
     $('#quickMonSat').addEventListener('click',()=>setDays([1,2,3,4,5,6]));$('#quickEveryDay').addEventListener('click',()=>setDays([0,1,2,3,4,5,6]));$('#quickClearDays').addEventListener('click',()=>setDays([]));
     $('#quickTimingPreset').addEventListener('change',e=>{const q=clean(e.target.value).toLowerCase();if(q.includes('morning +'))setTimes('10:00','12:00','17:00','20:00');else if(q.includes('morning'))setTimes('10:00','12:00');else if(q.includes('lunch'))setTimes('12:00','14:00');else if(q.includes('afternoon'))setTimes('14:00','17:00');else if(q.includes('evening'))setTimes('17:00','20:00');});
     $('#quickNearbyResults').addEventListener('click',e=>{const p=e.target.closest('[data-quick-nearby-place]');if(p){const place=nearbyPlaceCache.get(p.dataset.quickNearbyPlace);if(!place)return;$('#quickHospital').value=place.name||'';$('#quickAddress').value=place.address||'';$('#quickdocLatitude').value=place.latitude||'';$('#quickdocLongitude').value=place.longitude||'';$('#quickdocCapturedAt').value=new Date().toISOString();$('#quickdocLocationStatus').textContent=`Nearby hospital selected • ${place.name}`;return;}const b=e.target.closest('[data-quick-nearby-doctor]');if(!b)return;const d=doctorById(b.dataset.quickNearbyDoctor);if(!d)return;$('#quickHospital').value=doctorHospital(d);$('#quickArea').value=d.area||d.hq||'';$('#quickAddress').value=d.address||d.hospitalAddress||'';$('#quickdocLatitude').value=d.latitude||'';$('#quickdocLongitude').value=d.longitude||'';$('#quickdocAccuracy').value=d.locationAccuracy||'';$('#quickdocCapturedAt').value=d.locationCapturedAt||'';$('#quickdocLocationStatus').textContent=`Nearby saved hospital selected • ${doctorHospital(d)}`;});
     const gpsListener=e=>{if(e.detail?.prefix!=='quickdoc')return;renderNearby(e.detail.latitude,e.detail.longitude);if(window.AndroidBridge?.searchNearbyHospitals)window.AndroidBridge.searchNearbyHospitals('quickdoc',e.detail.latitude,e.detail.longitude,2000);};document.addEventListener('mr-location-ready',gpsListener,{once:true});setupLocationCapture('quickdoc',true);
-    form.addEventListener('submit',e=>{e.preventDefault();const d=doctorById(doctorId.value);if(!d){toast('Search and select a doctor first.');showDoctors();return;}const fd=new FormData(form),days=selectedDays(),from=normalizeTime(fd.get('meetingFrom')),to=normalizeTime(fd.get('meetingTo')),from2=normalizeTime(fd.get('meetingFrom2')),to2=normalizeTime(fd.get('meetingTo2'));if((from&&!to)||(!from&&to)||(from2&&!to2)||(!from2&&to2)){toast('Complete both From and To for each timing.');return;}if((from&&timeMinutes(to)<=timeMinutes(from))||(from2&&timeMinutes(to2)<=timeMinutes(from2))){toast('Meeting To must be later than From.');return;}if((from||from2)&&!days.length){toast('Select meeting day(s).');return;}d.hospital=clean(fd.get('hospital'));d.address=clean(fd.get('address'));d.area=clean(fd.get('area'))||inferDoctorArea(d)||d.area||d.hq;d.monthlyVisitTarget=parseFrequency(fd.get('monthlyVisitTargetText'));d.minVisitGapDays=Math.max(0,Math.round(num(fd.get('minVisitGapDays'))));d.meetingDays=days;d.meetingFrom=from;d.meetingTo=to;d.meetingFrom2=from2;d.meetingTo2=to2;d.linkedChemistId=clean(fd.get('linkedChemistId'));d.chemistName=chemistById(d.linkedChemistId)?.name||'';if($('#quickUseGps').checked){const lat=num($('#quickdocLatitude').value),lng=num($('#quickdocLongitude').value),acc=num($('#quickdocAccuracy').value);if(lat&&lng){if(acc>200&&!confirm(`GPS accuracy is about ${Math.round(acc)} m. Save this hospital location anyway?`))return;d.latitude=lat;d.longitude=lng;d.locationAccuracy=acc||'';d.locationCapturedAt=$('#quickdocCapturedAt').value||new Date().toISOString();d.locationSource='Quick doctor GPS';}}d.updatedAt=new Date().toISOString();d.needsCompletion=doctorCompleteness(d).score<100;saveState();closeSheet();toast(`Doctor details saved • ${doctorVisitPolicy(d).label}`);});
+    form.addEventListener('submit',e=>{e.preventDefault();const d=doctorById(doctorId.value);if(!d){toast('Search and select a doctor first.');showDoctors();return;}const fd=new FormData(form),clinicSystem=clean(fd.get('clinicSystem'))||'direct',cardDropTime=normalizeTime(fd.get('cardDropTime')),days=selectedDays(),from=normalizeTime(fd.get('meetingFrom')),to=normalizeTime(fd.get('meetingTo')),from2=normalizeTime(fd.get('meetingFrom2')),to2=normalizeTime(fd.get('meetingTo2'));if((from&&!to)||(!from&&to)||(from2&&!to2)||(!from2&&to2)){toast('Complete both From and To for each timing.');return;}if((from&&timeMinutes(to)<=timeMinutes(from))||(from2&&timeMinutes(to2)<=timeMinutes(from2))){toast('Meeting To must be later than From.');return;}if((from||from2)&&!days.length){toast('Select meeting day(s).');return;}if(clinicSystem==='card_later'&&!cardDropTime){toast('Set card drop time.');return;}d.clinicSystem=clinicSystem;d.cardDropTime=clinicSystem==='card_later'?cardDropTime:'';d.hospital=clean(fd.get('hospital'));d.address=clean(fd.get('address'));d.area=clean(fd.get('area'))||inferDoctorArea(d)||d.area||d.hq;d.monthlyVisitTarget=parseFrequency(fd.get('monthlyVisitTargetText'));d.minVisitGapDays=Math.max(0,Math.round(num(fd.get('minVisitGapDays'))));d.meetingDays=days;d.meetingFrom=from;d.meetingTo=to;d.meetingFrom2=from2;d.meetingTo2=to2;d.linkedChemistId=clean(fd.get('linkedChemistId'));d.chemistName=chemistById(d.linkedChemistId)?.name||'';if($('#quickUseGps').checked){const lat=num($('#quickdocLatitude').value),lng=num($('#quickdocLongitude').value),acc=num($('#quickdocAccuracy').value);if(lat&&lng){if(acc>200&&!confirm(`GPS accuracy is about ${Math.round(acc)} m. Save this hospital location anyway?`))return;d.latitude=lat;d.longitude=lng;d.locationAccuracy=acc||'';d.locationCapturedAt=$('#quickdocCapturedAt').value||new Date().toISOString();d.locationSource='Quick doctor GPS';}}d.updatedAt=new Date().toISOString();d.needsCompletion=doctorCompleteness(d).score<100;saveState();closeSheet();toast(`Doctor details saved • ${doctorVisitPolicy(d).label}`);});
   }
 
   function editRecord(type,id='') {
@@ -1730,7 +1877,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
       <form id="recordForm" class="sheet-form">
         <label><span>${isDoctor?'Doctor name':'Chemist name'}</span><input name="name" required value="${esc(old.name||'')}"></label>
         ${!isDoctor?`<label><span>Preferred distributor (optional)</span><select name="linkedDistributorId">${distributorOptions(preferredDistributor(old)?.id||'')}</select></label>`:''}
-        ${isDoctor?`<label><span>Hospital / clinic name</span><input name="hospital" value="${esc(doctorHospital(old))}" placeholder="Example: Sterling Hospital"></label><div class="lookup-label field-block"><span class="field-caption">Doctor under chemist</span><div class="lookup-field"><input id="recordChemistSearch" type="search" autocomplete="off" value="${esc(linkedChemist(old)?.name||'')}" placeholder="Search chemist name or area…"><input id="recordChemistId" name="linkedChemistId" type="hidden" value="${esc(existingChemist)}"><div id="recordChemistResults" class="search-results lookup-results hidden"></div></div></div><div class="field-grid two"><label><span>Monthly visits</span><select name="monthlyVisitTarget"><option value="1" ${doctorVisitPolicy(old).target===1?'selected':''}>1× / month</option><option value="2" ${doctorVisitPolicy(old).target===2?'selected':''}>2× / month</option><option value="3" ${doctorVisitPolicy(old).target===3?'selected':''}>3× / month</option><option value="4" ${doctorVisitPolicy(old).target===4?'selected':''}>4× / month</option></select></label><label><span>Custom minimum gap days</span><input name="minVisitGapDays" type="number" min="0" max="31" value="${esc(num(old.minVisitGapDays)||0)}" placeholder="0 = automatic"></label></div><div class="schedule-card"><div class="form-section-title"><h3>Doctor meeting timing</h3><p>Save once. It appears during every search and meeting.</p></div><div class="schedule-quick"><button type="button" id="monSatDaysBtn">Mon–Sat</button><button type="button" id="allDaysBtn">Every day</button><button type="button" id="clearDaysBtn">Clear</button></div><div class="day-selector">${DAY_NAMES.map((day,i)=>`<label class="day-option"><input type="checkbox" name="meetingDays" value="${i}" ${normalizeMeetingDays(old.meetingDays).includes(i)?'checked':''}><span>${day}</span></label>`).join('')}</div><div class="field-grid two timing-grid"><label><span>First timing from</span><input name="meetingFrom" type="time" value="${esc(normalizeTime(old.meetingFrom))}"></label><label><span>First timing to</span><input name="meetingTo" type="time" value="${esc(normalizeTime(old.meetingTo))}"></label><label><span>Second timing from (optional)</span><input name="meetingFrom2" type="time" value="${esc(normalizeTime(old.meetingFrom2))}"></label><label><span>Second timing to (optional)</span><input name="meetingTo2" type="time" value="${esc(normalizeTime(old.meetingTo2))}"></label></div></div>`:''}
+        ${isDoctor?`<label><span>Hospital / clinic name</span><input name="hospital" value="${esc(doctorHospital(old))}" placeholder="Example: Sterling Hospital"></label><div class="lookup-label field-block"><span class="field-caption">Doctor under chemist</span><div class="lookup-field"><input id="recordChemistSearch" type="search" autocomplete="off" value="${esc(linkedChemist(old)?.name||'')}" placeholder="Search chemist name or area…"><input id="recordChemistId" name="linkedChemistId" type="hidden" value="${esc(existingChemist)}"><div id="recordChemistResults" class="search-results lookup-results hidden"></div></div></div><div class="field-grid two"><label><span>Monthly visits</span><select name="monthlyVisitTarget"><option value="1" ${doctorVisitPolicy(old).target===1?'selected':''}>1× / month</option><option value="2" ${doctorVisitPolicy(old).target===2?'selected':''}>2× / month</option><option value="3" ${doctorVisitPolicy(old).target===3?'selected':''}>3× / month</option><option value="4" ${doctorVisitPolicy(old).target===4?'selected':''}>4× / month</option></select></label><label><span>Custom minimum gap days</span><input name="minVisitGapDays" type="number" min="0" max="31" value="${esc(num(old.minVisitGapDays)||0)}" placeholder="0 = automatic"></label></div><div class="schedule-card clinic-system-card"><div class="form-section-title"><h3>Clinic meeting system</h3><p>Field access comes before route planning.</p></div><label><span>Clinic system</span><select id="recordClinicSystem" name="clinicSystem"><option value="direct" ${doctorClinicSystem(old)==='direct'?'selected':''}>Direct meeting in saved days/time</option><option value="appointment" ${doctorClinicSystem(old)==='appointment'?'selected':''}>Appointment required</option><option value="card_later" ${doctorClinicSystem(old)==='card_later'?'selected':''}>Card drop first → later meeting</option></select></label><div id="recordCardDropFields" class="field-grid two ${doctorClinicSystem(old)==='card_later'?'':'hidden'}"><label><span>Card drop time</span><input name="cardDropTime" type="time" value="${esc(doctorCardDropTime(old))}"></label><div class="notice">Mark Card given ✓ on the day. Only then later meeting enters the route.</div></div></div><div id="recordMeetingTimingCard" class="schedule-card ${doctorClinicSystem(old)==='appointment'?'appointment-mode-muted':''}"><div class="form-section-title"><h3>Doctor meeting timing</h3><p>Direct/card-later use this window. Appointment-only doctors can leave regular timing blank.</p></div><div class="schedule-quick"><button type="button" id="monSatDaysBtn">Mon–Sat</button><button type="button" id="allDaysBtn">Every day</button><button type="button" id="clearDaysBtn">Clear</button></div><div class="day-selector">${DAY_NAMES.map((day,i)=>`<label class="day-option"><input type="checkbox" name="meetingDays" value="${i}" ${normalizeMeetingDays(old.meetingDays).includes(i)?'checked':''}><span>${day}</span></label>`).join('')}</div><div class="field-grid two timing-grid"><label><span>First timing from</span><input name="meetingFrom" type="time" value="${esc(normalizeTime(old.meetingFrom))}"></label><label><span>First timing to</span><input name="meetingTo" type="time" value="${esc(normalizeTime(old.meetingTo))}"></label><label><span>Second timing from (optional)</span><input name="meetingFrom2" type="time" value="${esc(normalizeTime(old.meetingFrom2))}"></label><label><span>Second timing to (optional)</span><input name="meetingTo2" type="time" value="${esc(normalizeTime(old.meetingTo2))}"></label></div></div>`:''}
         <label><span>Address</span><textarea name="address" rows="2" placeholder="Clinic / shop full address">${esc(old.address||'')}</textarea></label>
         <label><span>Area / place</span><input name="area" value="${esc((isDoctor?inferDoctorArea(old):old.area)||old.hq||state.profile.hq||'')}"></label>
         ${isDoctor?`<div class="location-card">
@@ -1742,6 +1889,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
         <div class="button-row">${id?`<button type="button" class="btn danger" id="deleteRecordBtn">Delete</button>`:''}<button type="submit" class="btn primary">Save once</button></div>
       </form>`);
     if(isDoctor){
+      const syncRecordClinicSystem=()=>{const system=$('#recordClinicSystem').value;$('#recordCardDropFields').classList.toggle('hidden',system!=='card_later');$('#recordMeetingTimingCard').classList.toggle('appointment-mode-muted',system==='appointment');};$('#recordClinicSystem').addEventListener('change',syncRecordClinicSystem);syncRecordClinicSystem();
       const chemistInput=$('#recordChemistSearch'),chemistIdInput=$('#recordChemistId'),chemistResults=$('#recordChemistResults');
       const showChemists=()=>{const q=clean(chemistInput.value).toLowerCase();const items=state.chemists.filter(c=>!q||[c.name,c.area,c.hq,c.address].join(' ').toLowerCase().includes(q)).sort((a,b)=>a.name.localeCompare(b.name)).slice(0,25);chemistResults.innerHTML=items.length?items.map(c=>`<button type="button" class="search-result" data-record-chemist-id="${esc(c.id)}"><strong>${esc(c.name)}</strong><small>${esc([c.area||c.hq,c.address].filter(Boolean).join(' • ')||'No address')}</small></button>`).join(''):`<div class="lookup-empty">No chemist found.</div>`;chemistResults.classList.remove('hidden');};
       chemistInput.addEventListener('focus',showChemists);chemistInput.addEventListener('input',()=>{chemistIdInput.value='';showChemists();});chemistResults.addEventListener('click',e=>{const b=e.target.closest('[data-record-chemist-id]');if(!b)return;const c=chemistById(b.dataset.recordChemistId);if(!c)return;chemistIdInput.value=c.id;chemistInput.value=c.name;chemistResults.classList.add('hidden');});
@@ -1759,6 +1907,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
         const days=fd.getAll('meetingDays').map(Number),from=normalizeTime(fd.get('meetingFrom')),to=normalizeTime(fd.get('meetingTo')),from2=normalizeTime(fd.get('meetingFrom2')),to2=normalizeTime(fd.get('meetingTo2'));
         const anyTime=from||to||from2||to2;if(anyTime&&!days.length){toast('Choose doctor meeting day(s).');return;}if((from&&!to)||(!from&&to)||(from2&&!to2)||(!from2&&to2)){toast('Complete both From and To for each timing.');return;}if((from&&timeMinutes(to)<=timeMinutes(from))||(from2&&timeMinutes(to2)<=timeMinutes(from2))){toast('Meeting To time must be later than From time.');return;}if(days.length&&!anyTime){toast('Add at least one meeting time or clear the selected days.');return;}
         rec.meetingDays=days;rec.meetingFrom=from;rec.meetingTo=to;rec.meetingFrom2=from2;rec.meetingTo2=to2;
+        rec.clinicSystem=clean(fd.get('clinicSystem'))||'direct';rec.cardDropTime=rec.clinicSystem==='card_later'?normalizeTime(fd.get('cardDropTime')):'';if(rec.clinicSystem==='card_later'&&!rec.cardDropTime){toast('Set card drop time.');return;}
         rec.monthlyVisitTarget=Math.max(1,Math.min(4,Math.round(num(fd.get('monthlyVisitTarget'))||2)));rec.minVisitGapDays=Math.max(0,Math.round(num(fd.get('minVisitGapDays'))||0));
         rec.linkedChemistId=clean(fd.get('linkedChemistId'));const c=chemistById(rec.linkedChemistId);rec.chemistName=c?.name||'';
       }
@@ -1781,7 +1930,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
     if(isDoctor){
       const timing=doctorMeetingStatus(r),elig=doctorEligibilityForDate(r),apt=upcomingAppointments().find(x=>x.doctorId===r.id),products=suggestedProductsForDoctor(r),kind=doctorType(r);
       const aptWhen=apt?(apt.status==='Doctor will call'?`Waiting for doctor call • reminder ${prettyDate(apt.reminderDate||apt.date)}${apt.reminderTime?` • ${timeLabel(apt.reminderTime)}`:''}`:`${apt.status} • ${prettyDate(apt.date)}${apt.time?` • ${timeLabel(apt.time)}`:''}`):'No upcoming appointment';
-      extra=`<div class="detail-section"><h4>Doctor type & product focus</h4><div class="doctor-fit-card"><div><span class="specialty-pill">${esc(kind)}</span><strong>${esc(products.join(' • ')||'No mapped product')}</strong><small>Suggested from doctor section + saved focus brands</small></div></div></div><div class="detail-section"><h4>Appointment</h4><div class="detail-address"><strong>${esc(aptWhen)}</strong>${apt?.shortDescription?`<br><span class="muted-line">${esc(apt.shortDescription)}</span>`:''}${apt?.notes?`<br>${esc(apt.notes)}`:''}</div>${apt?.status==='Doctor will call'?`<button class="btn primary compact" data-action="doctor-called-now" data-id="${esc(apt.id)}">Doctor called → add time</button>`:''}<button class="btn secondary compact" data-action="add-appointment" data-doctor-id="${esc(r.id)}">${apt?'New / change appointment':'Get appointment'}</button></div><div class="detail-section"><h4>Monthly visit rule</h4><div class="detail-address"><strong>${esc(doctorVisitPolicy(r).label)}</strong><br>${esc(elig.reason)}</div></div><div class="detail-section"><h4>Doctor meeting timing</h4><div class="detail-address timing-detail ${esc(timing.state)}"><strong>${esc(timing.label)}</strong>${doctorMeetingTiming(r)?`<br>${esc(doctorMeetingTiming(r))}`:'<br>Not set yet'}</div></div><div class="detail-section"><h4>Under chemist</h4><div class="detail-address">${esc(ch?.name||'Not linked yet')}</div></div><div class="detail-section"><h4>Latest product status</h4>${statusTags(latestStatuses(r.id,ch?.id||''))}</div>`;
+      extra=`<div class="detail-section"><h4>Clinic meeting system</h4><div class="doctor-fit-card"><div><span class="specialty-pill">${esc(doctorClinicSystemLabel(r))}</span><strong>${esc(clinicAccessSummary(r))}</strong><small>${doctorClinicSystem(r)==='card_later'?(cardDroppedForDate(r.id)?'Card already given today':'Card must be given before later meeting'):doctorClinicSystem(r)==='appointment'?'Only confirmed appointment becomes a fixed route slot':'Available on saved meeting days/time'}</small></div></div></div><div class="detail-section"><h4>Doctor type & product focus</h4><div class="doctor-fit-card"><div><span class="specialty-pill">${esc(kind)}</span><strong>${esc(products.join(' • ')||'No mapped product')}</strong><small>Suggested from doctor section + saved focus brands</small></div></div></div><div class="detail-section"><h4>Appointment</h4><div class="detail-address"><strong>${esc(aptWhen)}</strong>${apt?.shortDescription?`<br><span class="muted-line">${esc(apt.shortDescription)}</span>`:''}${apt?.notes?`<br>${esc(apt.notes)}`:''}</div>${apt?.status==='Doctor will call'?`<button class="btn primary compact" data-action="doctor-called-now" data-id="${esc(apt.id)}">Doctor called → add time</button>`:''}<button class="btn secondary compact" data-action="add-appointment" data-doctor-id="${esc(r.id)}">${apt?'New / change appointment':'Get appointment'}</button></div><div class="detail-section"><h4>Monthly visit rule</h4><div class="detail-address"><strong>${esc(doctorVisitPolicy(r).label)}</strong><br>${esc(elig.reason)}</div></div><div class="detail-section"><h4>Doctor meeting timing</h4><div class="detail-address timing-detail ${esc(timing.state)}"><strong>${esc(timing.label)}</strong>${doctorMeetingTiming(r)?`<br>${esc(doctorMeetingTiming(r))}`:'<br>Not set yet'}</div></div><div class="detail-section"><h4>Under chemist</h4><div class="detail-address">${esc(ch?.name||'Not linked yet')}</div></div><div class="detail-section"><h4>Latest product status</h4>${statusTags(latestStatuses(r.id,ch?.id||''))}</div>`;
     }else{
       const docs=state.doctors.filter(d=>d.linkedChemistId===id),dist=preferredDistributor(r);
       extra=`<div class="detail-section"><h4>Preferred distributor</h4><div class="detail-address">${esc(dist?.name||'Not set')}</div></div><div class="detail-section"><h4>Doctors under this chemist</h4>${docs.length?docs.map(d=>`<button class="linked-doctor-row" data-action="view-record" data-type="doctor" data-id="${d.id}"><strong>${esc(doctorDisplayName(d))}</strong><small>${esc(inferDoctorArea(d)||'')} • ${esc(doctorType(d))}</small></button>`).join(''):empty('No doctor linked yet.')}</div>`;
@@ -1832,8 +1981,8 @@ function viewOrder(id){
   $('#deleteOrderBtn').addEventListener('click',()=>{if(!confirm('Delete order and its POB activity?'))return;state.orders=state.orders.filter(x=>x.id!==id);state.visits=state.visits.filter(v=>v.orderId!==id);saveState();closeSheet();});
 }
 function planTodayRoute(){
-  const eligible=state.doctors.filter(d=>{const appointment=appointmentForDoctorDate(d.id,localISODate(),true),slot=appointmentSlot(appointment)||todaySlot(d),eligibility=doctorEligibilityForDate(d);return slot&&num(d.latitude)&&num(d.longitude)&&(eligibility.eligible||appointment);}),distributorStops=pendingDistributorStops(),preferred=smartPatchCandidates(30).find(x=>eligible.some(d=>d.id===x.doctor.id))?.doctor||eligible[0]||null;
-  openSheet('Today location-wise planning','Strict nearest-chain mode: selected start → nearest next stop → nearest from that stop. Timing conflicts are warnings only.',`${eligible.length?`<label class="sheet-form"><span>Start from saved doctor / hospital</span><select id="routeStartDoctor">${eligible.map(d=>`<option value="${esc(d.id)}" ${d.id===preferred?.id?'selected':''}>${esc(doctorDisplayName(d))}</option>`).join('')}</select></label><label class="toggle-line"><input id="includeVisitedRoute" type="checkbox"> Include doctors already called today</label><div id="routeResult"></div>`:empty('No doctor has both today timing and verified hospital GPS. Distributor planning is still shown below.')}<div id="distributorPlanResult"></div>`);
+  const eligible=state.doctors.filter(d=>{const access=doctorAccessForDate(d),slot=access.fixed?access.slots[0]:todaySlot(d),eligibility=doctorEligibilityForDate(d);return access.ready&&slot&&num(d.latitude)&&num(d.longitude)&&(eligibility.eligible||access.fixed);}),distributorStops=pendingDistributorStops(),preferred=smartPatchCandidates(30).find(x=>eligible.some(d=>d.id===x.doctor.id))?.doctor||eligible[0]||null;
+  openSheet('Today location-wise planning','Clinic-access-aware route: only ready doctors enter the chain; confirmed appointments are fixed and card-drop doctors wait until Card given ✓.',`${eligible.length?`<label class="sheet-form"><span>Start from saved doctor / hospital</span><select id="routeStartDoctor">${eligible.map(d=>`<option value="${esc(d.id)}" ${d.id===preferred?.id?'selected':''}>${esc(doctorDisplayName(d))}</option>`).join('')}</select></label><label class="toggle-line"><input id="includeVisitedRoute" type="checkbox"> Include doctors already called today</label><div id="routeResult"></div>`:empty('No doctor has both today timing and verified hospital GPS. Distributor planning is still shown below.')}<div id="distributorPlanResult"></div>`);
   const renderDistributors=()=>{$('#distributorPlanResult').innerHTML=`<div class="detail-section"><h4>Accepted-order distributor stops</h4>${distributorStops.length?distributorStops.map((x,i)=>`<div class="route-stop ${x.mapReady?'':'route-risk'}"><span>${i+1}</span><div><strong>${esc(x.distributor.name)}</strong><small>${esc(`₹${x.totalValue.toLocaleString('en-IN')} • ${x.orders.length} order(s) • ${x.chemists.join(', ')||'Chemist pending'} • ${x.address||'Address missing'}${x.mapReady?' • map pin ready':' • add map pin in Distributor'}`)}</small></div>${entityMapUrl(x.distributor)?`<a class="btn secondary compact" href="${entityMapUrl(x.distributor)}" target="_blank" rel="noopener">Map</a>`:''}</div>`).join(''):empty('No accepted order is pending fulfilment.')}</div>`;};
   renderDistributors();if(!eligible.length)return;
   const render=()=>{const startDoctor=doctorById($('#routeStartDoctor').value)||preferred;if(!startDoctor)return;const lat=num(startDoctor.latitude),lng=num(startDoctor.longitude),route=groupedHospitalRouteCandidates(lat,lng,$('#includeVisitedRoute').checked),mappedDistributors=distributorStops.filter(x=>x.mapReady).map(x=>({type:'distributor',latitude:x.latitude,longitude:x.longitude,distributor:x.distributor})),url=googleRouteUrl(lat,lng,[...route,...mappedDistributors]);$('#routeResult').innerHTML=route.length?`<div class="notice">Start: ${esc(doctorDisplayName(startDoctor))}. Order is built as a true chain from each previous stop; same-hospital doctors are combined. Timing conflicts are shown but do not jump over a nearer stop.</div><div class="route-list">${route.map((x,i)=>`<div class="route-stop ${x.timingRisk?'route-risk':''}"><span>${i+1}</span><div><strong>${esc(x.hospital)}</strong><small>${esc(`${x.doctors.map(y=>doctorDisplayName(y.doctor)).join(', ')} • ETA ${minuteLabel(x.arrivalMinutes)} • ${x.distance.toFixed(1)} km approximate • ${x.waitMinutes?`wait ${x.waitMinutes} min • `:''}${x.timingRisk?`timing conflict +${x.lateMinutes} min • `:''}verified hospital pin`)}</small></div><button data-action="log-record" data-type="doctor" data-id="${x.doctor.id}">Meet</button></div>`).join('')}</div><div class="button-row">${url?`<a class="btn primary" href="${url}" target="_blank" rel="noopener">Open doctors + mapped distributors in Maps</a>`:''}<button id="saveRoutePlanBtn" class="btn secondary">Save plan</button></div>`:empty('No unvisited doctor is available with today timing and verified hospital GPS.');$('#saveRoutePlanBtn')?.addEventListener('click',()=>{state.routePlans.push({id:uid('route'),date:localISODate(),createdAt:new Date().toISOString(),startDoctorId:startDoctor.id,startDoctorName:doctorDisplayName(startDoctor),startLatitude:lat,startLongitude:lng,source:'Strict nearest-chain verified hospital GPS + accepted distributor orders',stops:[...route.map((x,i)=>({order:i+1,type:'Hospital',doctorId:x.doctor.id,doctorName:x.doctors.map(y=>y.doctor.name).join('; '),hospital:x.hospital,meetingFrom:x.slot.from,meetingTo:x.slot.to,estimatedArrival:minuteLabel(x.arrivalMinutes),travelMinutes:x.travelMinutes,waitMinutes:x.waitMinutes,timingRisk:x.timingRisk?'Yes':'No',locationAccuracy:x.doctor.locationAccuracy||'',locationSource:x.doctor.locationSource||'Verified hospital GPS',latitude:x.latitude,longitude:x.longitude,distanceKm:Number(x.distance.toFixed(2))})),...distributorStops.map((x,i)=>({order:route.length+i+1,type:'Distributor',doctorName:'',hospital:x.distributor.name,meetingFrom:'',meetingTo:'',estimatedArrival:'Flexible',travelMinutes:'',waitMinutes:'',timingRisk:x.mapReady?'No':'Map pin missing',locationAccuracy:'',locationSource:x.mapReady?'Manual verified map pin':'Address only',latitude:x.latitude||'',longitude:x.longitude||'',distanceKm:''}))]});saveState(false);toast('Doctor and distributor plan added to Excel.');});};
@@ -1843,7 +1992,7 @@ function workbookData(){
   const latestRoute=state.routePlans.filter(r=>r.date===localISODate()).slice(-1)[0];
   return {sheets:[
     {name:'Summary',rows:[['MR One Export',localISODateTime()],['HQ',state.profile.hq],['TM',state.profile.tmName],['Doctors',state.doctors.length],['Chemists',state.chemists.length],['Distributors',state.distributors.length],['Orders',state.orders.length],['RCPA',state.rcpa.length],['Sample Items',state.sampleItems.length],['Sample Balance',state.sampleItems.reduce((n,x)=>n+sampleBalance(x),0)],['Expenses This Month',expenseTotal(expensesForMonth())],['Voice Captures',state.captures.length],['Active Schemes',state.schemes.filter(x=>schemeState(x)==='active').length],[],['Metric','Today','Month Cumulative'],...METRICS.map(([k,l])=>[l,statsForDay()[k],statsForMonth()[k]]),['Samples Issued',sampleIssuedForDay(),sampleIssuedForMonth()],['Expenses',expenseTotal(expensesForDay()),expenseTotal(expensesForMonth())],['RCPA',state.rcpa.filter(x=>dateOnly(x.date)===localISODate()).length,state.rcpa.filter(x=>monthKey(x.date)===monthKey()).length]]},
-    {name:'Doctors',rows:[['Doctor Name','Hospital / Clinic','Google Place ID','Hospital Opening Hours','Under Chemist','Monthly Visit Target','Minimum Gap Days','Meeting Days','Meeting From 1','Meeting To 1','Meeting From 2','Meeting To 2','Address','Area','Latitude','Longitude','Location Source','Last Meeting','Next Follow-up','Notes'],...state.doctors.map(d=>[d.name,doctorHospital(d),d.placeId||'',(d.hospitalOpeningHours||[]).join('; '),linkedChemist(d)?.name||d.chemistName,doctorVisitPolicy(d).target,doctorVisitPolicy(d).gap,normalizeMeetingDays(d.meetingDays).map(x=>DAY_NAMES[x]).join('; '),d.meetingFrom,d.meetingTo,d.meetingFrom2,d.meetingTo2,d.address,d.area,d.latitude,d.longitude,d.locationSource||'',d.lastVisit,d.nextFollowUp,d.notes])]},
+    {name:'Doctors',rows:[['Doctor Name','Hospital / Clinic','Google Place ID','Hospital Opening Hours','Under Chemist','Clinic System','Card Drop Time','Monthly Visit Target','Minimum Gap Days','Meeting Days','Meeting From 1','Meeting To 1','Meeting From 2','Meeting To 2','Address','Area','Latitude','Longitude','Location Source','Last Meeting','Next Follow-up','Notes'],...state.doctors.map(d=>[d.name,doctorHospital(d),d.placeId||'',(d.hospitalOpeningHours||[]).join('; '),linkedChemist(d)?.name||d.chemistName,doctorClinicSystemLabel(d),doctorClinicSystem(d)==='card_later'?doctorCardDropTime(d):'',doctorVisitPolicy(d).target,doctorVisitPolicy(d).gap,normalizeMeetingDays(d.meetingDays).map(x=>DAY_NAMES[x]).join('; '),d.meetingFrom,d.meetingTo,d.meetingFrom2,d.meetingTo2,d.address,d.area,d.latitude,d.longitude,d.locationSource||'',d.lastVisit,d.nextFollowUp,d.notes])]},
     {name:'Chemists',rows:[['Chemist Name','Preferred Distributor','Address','Area','Latitude','Longitude','Last Meeting','Next Follow-up','Notes'],...state.chemists.map(c=>[c.name,preferredDistributor(c)?.name||c.distributorName,c.address,c.area,c.latitude,c.longitude,c.lastVisit,c.nextFollowUp,c.notes])]},
     {name:'Distributors',rows:[['Distributor Name','Mobile','Address','Area','Latitude','Longitude','Last Order','Notes'],...state.distributors.map(d=>[d.name,d.mobile,d.address,d.area,d.latitude,d.longitude,d.lastOrderDate,d.notes])]},
     {name:'Orders',rows:[['Date','Doctor','Hospital','Chemist','Distributor','Products','Packs','Quantities','Schemes','POB Value','Status','Notes','Latitude','Longitude'],...state.orders.map(o=>[o.date,o.doctorName,o.doctorHospital,o.chemistName,distributorById(o.distributorId)?.name||o.distributorName,(o.items||[]).map(x=>x.product).join('; '),(o.items||[]).map(x=>x.pack).join('; '),(o.items||[]).map(x=>x.qty).join('; '),(o.items||[]).map(x=>x.schemeRatio).join('; '),orderTotal(o),o.status,o.notes,o.latitude,o.longitude])]},
@@ -1852,6 +2001,7 @@ function workbookData(){
     {name:'Sample Distribution',rows:[['Date','Doctor','Chemist','Product','Pack','Batch','Qty','Visit ID','Notes'],...state.sampleTransactions.filter(x=>x.type==='issue').map(x=>[x.date,x.doctorName,x.chemistName,x.product,x.pack,x.batch,x.qty,x.visitId,x.notes])]},
     {name:'RCPA',rows:[['Date','Chemist','Doctor','Our Brand','Our Availability','Competitor Brand','Competitor Company','Rx / Units','Notes'],...state.rcpa.map(x=>[x.date,x.chemistName,x.doctorName,x.ourBrand,x.ourAvailability,x.competitorBrand,x.competitorCompany,x.rxQty,x.notes])]},
     {name:'Tour Program',rows:[['Date','Work Type','Area / Town','Joint Work With','Objective','Notes'],...state.tourPlans.map(x=>[x.date,x.workType,x.area,x.jointWorkWith,x.objective,x.notes])]},
+    {name:'Clinic Access',rows:[['Date','Doctor','Action','Completed At'],...state.clinicActions.map(x=>[x.date,doctorById(x.doctorId)?.name||x.doctorId,x.type,x.completedAt])]},
     {name:'Appointments',rows:[['Date','Time','Doctor','Hospital','Status','Duration Min','Contact / Source','Short Description','Notes'],...state.appointments.slice().sort((a,b)=>String(a.date).localeCompare(String(b.date))||String(a.time).localeCompare(String(b.time))).map(x=>[x.date,x.time,x.doctorName,x.hospital,x.status,x.durationMinutes,x.contactPerson,x.shortDescription,x.notes])]},
     {name:'Target & Sales',rows:[['Month','Target','Primary Sales','Secondary Sales','Collection','Achievement %','Notes'],...state.salesMonths.map(x=>[x.month,x.target,x.primary,x.secondary,x.collection,x.target?Math.round(num(x.secondary)/num(x.target)*100):'',x.notes])]},
     {name:'Visits',rows:[['Date','Doctor','Hospital','Chemist','Result','Not-met Reason','Rescheduled For','Replacement Doctor','Machine Action','Calls','POB Value','Product Feedback','Follow-up','Notes','Visit Latitude','Visit Longitude','GPS Accuracy','Hospital Latitude','Hospital Longitude','Distance from Hospital (m)','Location Audit'],...state.visits.filter(v=>v.doctorId||v.chemistId).map(v=>{const a=locationAuditForVisit(v);return [v.date,v.doctorName,v.doctorHospital,v.chemistName,v.outcomeLabel||OUTCOME_LABELS[v.outcome]||'Doctor met',v.notMetReason||'',v.rescheduledFor||'',v.replacementDoctorName||'',v.intelligenceAction||'',v.calls,v.pobValue,Object.entries(v.productStatuses||{}).map(([p,x])=>`${p}: ${statusLabel(x)}`).join('; '),v.followUpDate,v.notes,v.latitude,v.longitude,v.locationAccuracy,v.hospitalLatitude||doctorById(v.doctorId)?.latitude||'',v.hospitalLongitude||doctorById(v.doctorId)?.longitude||'',a.distanceMeters,a.status];})]},
@@ -1892,7 +2042,7 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
   function openDoctorFilterPanel(){
     const counts=new Map();state.doctors.forEach(d=>{const a=inferDoctorArea(d)||'Other';counts.set(a,(counts.get(a)||0)+1);});
     const areas=[...counts.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,18);
-    openSheet('Doctor filters','Filter by timing, doctor type or actual locality.',`<div class="filter-section"><small>TIMING</small><div class="chip-row wrap"><button class="chip" data-action="set-doctor-filter" data-value="all">All</button><button class="chip" data-action="set-doctor-filter" data-value="timing">Timing added</button><button class="chip" data-action="set-doctor-filter" data-value="no_timing">Without timing</button></div></div><div class="filter-section"><small>DOCTOR TYPE</small><div class="chip-row wrap"><button class="chip" data-action="set-doctor-filter" data-value="type:PEDIA">Pedia</button><button class="chip" data-action="set-doctor-filter" data-value="type:GYNAEC">Gynaec</button><button class="chip" data-action="set-doctor-filter" data-value="type:GP">GP</button><button class="chip" data-action="set-doctor-filter" data-value="type:MATRON">Matron</button></div></div><div class="filter-section"><small>AREA</small><div class="area-filter-grid">${areas.map(([a,n])=>`<button data-action="set-doctor-filter" data-value="area:${esc(a)}"><strong>${esc(a)}</strong><small>${esc(n)} doctors</small></button>`).join('')}</div></div>`);
+    openSheet('Doctor filters','Filter by today availability, timing, doctor type or actual locality.',`<div class="filter-section"><small>AVAILABILITY</small><div class="chip-row wrap"><button class="chip" data-action="set-doctor-filter" data-value="all">All</button><button class="chip" data-action="set-doctor-filter" data-value="today_available">Today’s Available</button></div></div><div class="filter-section"><small>TIMING</small><div class="chip-row wrap"><button class="chip" data-action="set-doctor-filter" data-value="timing">Timing added</button><button class="chip" data-action="set-doctor-filter" data-value="no_timing">Without timing</button></div></div><div class="filter-section"><small>DOCTOR TYPE</small><div class="chip-row wrap"><button class="chip" data-action="set-doctor-filter" data-value="type:PEDIA">Pedia</button><button class="chip" data-action="set-doctor-filter" data-value="type:GYNAEC">Gynaec</button><button class="chip" data-action="set-doctor-filter" data-value="type:GP">GP</button><button class="chip" data-action="set-doctor-filter" data-value="type:MATRON">Matron</button></div></div><div class="filter-section"><small>AREA</small><div class="area-filter-grid">${areas.map(([a,n])=>`<button data-action="set-doctor-filter" data-value="area:${esc(a)}"><strong>${esc(a)}</strong><small>${esc(n)} doctors</small></button>`).join('')}</div></div>`);
   }
 
   function globalSearch() {
@@ -2059,6 +2209,9 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
         if(action==='add-appointment')editAppointment('',a.dataset.doctorId||'');
         if(action==='edit-appointment')editAppointment(id);
         if(action==='doctor-called-now')doctorCalledNow(id);
+        if(action==='mark-card-given'){hideProximityCall();markCardDropped(id);}
+        if(action==='start-next-call')quickMeeting(id,'');
+        if(action==='refresh-next-call'){requestProximityCheck();toast('Refreshing current GPS…');}
         if(action==='start-proximity-call'){hideProximityCall();quickMeeting(id,'');}
         if(action==='dismiss-proximity'){proximityDismissedUntil=Date.now()+15*60*1000;hideProximityCall();}
         if(action==='show-more-doctors'){doctorRenderLimit+=60;renderDoctors();}

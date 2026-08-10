@@ -1,12 +1,12 @@
-# MR One v1.3.0
+# MR One v1.4.0
 
-Offline-first Android field companion for a medical representative. v1.3 is a performance-first workflow upgrade: fast doctor search, evidence-based locality grouping, appointment/call-back handling, specialty product focus, proximity call prompts and a cleaner premium mobile UI.
+Offline-first Android field companion for a medical representative. v1.4 adds real clinic-access intelligence on top of the v1.3 performance/premium workflow: Direct timed meeting, Appointment required, and Card drop → later meeting, then ranks only feasible next calls by eligibility, time window, GPS distance and travel ETA. Doctors also get a **Today’s Available** filter that applies the same clinic-access and remaining-window rules before showing a doctor.
 
 ## v1.3 fast field flow
 
 - **Doctor will call** → choose reminder date/time → reminder stays at the top of Home → when the doctor calls, tap **Doctor called → Add time** → enter exact appointment time → Smart Plan treats it as a fixed slot.
 - **Appointments** remain separate from pending call-backs, so the route is not blocked until a real time is confirmed.
-- **Doctor filters:** Timing added, Without timing, Pedia, Gynaec, GP, Matron and inferred locality.
+- **Doctor filters:** Today’s Available, Timing added, Without timing, Pedia, Gynaec, GP, Matron and inferred locality.
 - **Ahmedabad locality:** saved address/hospital text is used to infer areas such as Nikol, Naroda, Bapunagar, Odhav, Krishnanagar, Thakkarnagar, Hirawadi and Asarva. If there is not enough evidence, the app shows **Area pending**.
 - **Google:** one-tap doctor-name search and address search.
 - **Product fit:** Gynaec/GP prioritize Zefrich + Zefrich HP; Pedia/Matron prioritize MumMum 1 + MumMum 2 + Simyl MCT, while saved doctor focus brands remain visible.
@@ -133,7 +133,7 @@ The APK builds on GitHub Actions. Optional live Google nearby-hospital results r
 
 Build artifact:
 
-`MR-Machine-Intelligence-v14.4-APK`
+`MR-One-v1.4-APK`
 
 
 ## v14.3 Planning correction
@@ -156,3 +156,6 @@ Build artifact:
 - Premium sheet/page transitions and native haptic feedback are included.
 
 Protected apps may choose to block overlays. In that case, copy in SAN, return to MR, and use **Paste current clipboard directly in app**.
+
+## v1.4 clinic access intelligence
+See `CHANGELOG-v1.4.md`.

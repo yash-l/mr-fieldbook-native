@@ -44,6 +44,11 @@
           <div id="callReminderList" class="call-reminder-list"></div>
         </section>
 
+        <section id="nextCallPanel" class="next-call-panel" aria-live="polite">
+          <div class="priority-head"><div><span class="eyebrow">FIELD INTELLIGENCE</span><h2>Best next call</h2><p id="nextCallStatus">Checking GPS, clinic access and timing…</p></div><button class="btn secondary compact" data-action="refresh-next-call">Refresh GPS</button></div>
+          <div id="nextCallList" class="next-call-list"><div class="next-call-empty">Fetching current GPS…</div></div>
+        </section>
+
         <div class="hero-card">
           <div>
             <span class="eyebrow" id="todayLabel">TODAY</span>
