@@ -40,3 +40,6 @@ Tested parser/structure against `MR-Daily-Auto-Backup-2026-08-10-First-Week-Met.
 
 ## Android compile status
 A local `:app:assembleDebug` attempt could not start because this sandbox cannot resolve `services.gradle.org` to download Gradle 8.13. This is an environment/network limitation, not a reported Java/Gradle compiler result. Final APK compilation must be verified by the included GitHub Actions workflow.
+
+## v1.4.1 address-to-GPS regression
+See `VALIDATION-v1.4.1.md` and `TEST-30-DAY-v1.4.1.md` for the 30-day hybrid online/offline GPS validation.
