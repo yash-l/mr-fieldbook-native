@@ -3,7 +3,7 @@
 
   const STORE_KEY = 'mr-daily-auto-v3';
   const STORE_BACKUP_KEY = 'mr-daily-auto-v3-last-good';
-  const APP_VERSION = 1.4;
+  const APP_VERSION = 1.41;
   const METRICS = [
     ['calls', 'Calls'],
     ['inputs', 'Input Distributed'],
@@ -555,6 +555,39 @@ function defaultSchemes() {
   }
   function entityMapUrl(r) { return mapUrl(r.latitude, r.longitude, [r.address,r.area,r.hq].filter(Boolean).join(', ')); }
   function visitMapUrl(v) { return mapUrl(v.latitude, v.longitude); }
+  let pendingDoctorGpsId='';
+  let pendingDoctorGpsRows=[];
+  function cleanGpsQueryPart(value){return clean(value).replace(/https?:\/\/\S+/gi,' ').replace(/\s+/g,' ').trim();}
+  function doctorGpsQuery(doctor){
+    if(!doctor)return '';
+    const address=cleanGpsQueryPart(doctor.address||doctor.hospitalAddress||'');
+    const hospital=cleanGpsQueryPart(doctorHospital(doctor));
+    const area=cleanGpsQueryPart(inferDoctorArea(doctor)||doctor.area||'');
+    const hq=cleanGpsQueryPart(doctor.hq||state.profile.hq||'');
+    const primary=hospital||doctorDisplayName(doctor);
+    return [primary,address,area,hq,'Gujarat','India'].filter(Boolean).join(', ');
+  }
+  function resolveDoctorGpsOnline(id){
+    const doctor=doctorById(id);if(!doctor)return;
+    const query=doctorGpsQuery(doctor);
+    if(!clean(doctor.address||doctor.hospitalAddress)){toast('Add clinic address first.');return;}
+    if(!window.AndroidBridge?.searchDoctorPlaces){toast('Online GPS search needs the Android app build.');return;}
+    pendingDoctorGpsId=id;pendingDoctorGpsRows=[];
+    openSheet('Find clinic GPS online','Google Places searches the saved clinic/address. Nothing is saved until you choose the matching result.',`<div class="detail-section"><h4>${esc(doctorDisplayName(doctor))}</h4><div class="detail-address">${esc(doctor.address||doctor.hospitalAddress||'')}</div></div><div class="notice">Query: ${esc(query)}</div><div id="doctorGpsResults" class="card-list compact-list"><div class="empty-state"><strong>Searching online…</strong><span>Checking clinic/address matches.</span></div></div>`);
+    try{window.AndroidBridge.searchDoctorPlaces('doctor-gps',query);}catch(_){const out=$('#doctorGpsResults');if(out)out.innerHTML=empty('Could not start online GPS search.');}
+  }
+  function useDoctorGpsResult(index){
+    const doctor=doctorById(pendingDoctorGpsId),row=pendingDoctorGpsRows[index];if(!doctor||!row)return;
+    const lat=num(row.latitude),lng=num(row.longitude);if(!lat||!lng){toast('This result has no GPS pin.');return;}
+    doctor.latitude=lat;doctor.longitude=lng;doctor.placeId=clean(row.placeId);doctor.locationAccuracy='';doctor.locationCapturedAt=new Date().toISOString();doctor.locationSource='Google Places address match';doctor.resolvedPlaceName=clean(row.name);doctor.resolvedFormattedAddress=clean(row.address);doctor.gpsResolutionMode='online_address_confirmed';doctor.updatedAt=new Date().toISOString();
+    saveState(false);closeSheet();toast('Online clinic GPS saved. Offline planner can reuse this pin.');
+  }
+  window.__mrDoctorPlaceResults=(prefix,ok,json,error)=>{
+    if(prefix!=='doctor-gps')return;const out=$('#doctorGpsResults');if(!out)return;
+    if(!ok){out.innerHTML=`<div class="notice error">${esc(error||'Online GPS search failed. Keep the saved address and retry when internet is available.')}</div>`;return;}
+    let rows=[];try{rows=JSON.parse(json||'[]');}catch(_){rows=[];}pendingDoctorGpsRows=rows.filter(x=>num(x.latitude)&&num(x.longitude));
+    out.innerHTML=pendingDoctorGpsRows.length?pendingDoctorGpsRows.map((x,i)=>`<article class="record-card"><div class="record-title"><h3>${esc(x.name||'Clinic / hospital')}</h3><p>${esc(x.address||'Address unavailable')}</p></div><div class="tag-row"><span class="tag">${esc(x.primaryType||'place')}</span><span class="tag">${esc(Number(x.latitude).toFixed(5))}, ${esc(Number(x.longitude).toFixed(5))}</span></div><div class="record-actions"><a href="${mapUrl(x.latitude,x.longitude)}" target="_blank" rel="noopener">Check map</a><button data-action="use-doctor-gps" data-index="${i}">Use this GPS</button></div></article>`).join(''):empty('No confident place result found. Keep the address; do not save a guessed pin.');
+  };
 
   function latestPairVisit(doctorId, chemistId='') {
     return state.visits
@@ -1936,7 +1969,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
       extra=`<div class="detail-section"><h4>Preferred distributor</h4><div class="detail-address">${esc(dist?.name||'Not set')}</div></div><div class="detail-section"><h4>Doctors under this chemist</h4>${docs.length?docs.map(d=>`<button class="linked-doctor-row" data-action="view-record" data-type="doctor" data-id="${d.id}"><strong>${esc(doctorDisplayName(d))}</strong><small>${esc(inferDoctorArea(d)||'')} • ${esc(doctorType(d))}</small></button>`).join(''):empty('No doctor linked yet.')}</div>`;
     }
     const area=isDoctor?inferDoctorArea(r):(r.area||r.hq||'—');
-    const googleTools=isDoctor?`<div class="google-search-actions"><a class="btn secondary" href="${googleDoctorSearchUrl(r)}" target="_blank" rel="noopener">Google doctor name</a><a class="btn secondary" href="${googleAddressSearchUrl(r)}" target="_blank" rel="noopener">Google address</a></div>`:'';
+    const googleTools=isDoctor?`<div class="google-search-actions"><a class="btn secondary" href="${googleDoctorSearchUrl(r)}" target="_blank" rel="noopener">Google doctor name</a><a class="btn secondary" href="${googleAddressSearchUrl(r)}" target="_blank" rel="noopener">Google address</a>${clean(r.address||r.hospitalAddress)?`<button class="btn primary" data-action="resolve-doctor-gps" data-id="${esc(r.id)}">${r.latitude&&r.longitude?'Recheck GPS online':'Find GPS from address'}</button>`:''}</div>`:'';
     openSheet(isDoctor?doctorDisplayName(r):r.name,isDoctor?`${doctorType(r)} • Doctor profile`:'Chemist profile',`<div class="detail-hero"><div class="avatar">${esc(initials(r.name))}</div><div><div class="title-line"><h3>${esc(isDoctor?doctorDisplayName(r):r.name)}</h3>${isDoctor?`<span class="specialty-pill">${esc(doctorType(r))}</span>`:''}</div><p>${esc(isDoctor?(ch?.name||'Chemist not linked'):`${linkedDoctorCount(r.id)} doctors linked`)}</p></div></div><div class="detail-grid"><div class="detail-box"><small>Area</small><strong>${esc(area)}</strong></div><div class="detail-box"><small>Last meeting</small><strong>${esc(prettyDate(r.lastVisit))}</strong></div></div>${isDoctor&&doctorHospital(r)?`<div class="detail-section"><h4>Hospital / clinic</h4><div class="detail-address">${esc(doctorHospital(r))}</div></div>`:''}<div class="detail-section"><h4>Address</h4><div class="detail-address">${esc(r.address||'Not added')}</div></div>${googleTools}${map?`<a class="map-main-btn" href="${map}" target="_blank" rel="noopener">Open map location</a>`:''}${extra}${r.notes?`<div class="detail-section"><h4>Note</h4><div class="note-box">${esc(r.notes)}</div></div>`:''}<div class="detail-actions"><button data-action="log-record" data-type="${type}" data-id="${id}">${isDoctor?'Start doctor call':'Log meeting'}</button><button data-action="edit-record" data-type="${type}" data-id="${id}">Edit once</button><button data-close-sheet>Close</button></div><div class="detail-section"><h4>Meeting history</h4>${history.length?history.map(miniActivity).join(''):empty('No meetings yet.')}</div>`);
   }
 
@@ -2212,6 +2245,8 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
         if(action==='mark-card-given'){hideProximityCall();markCardDropped(id);}
         if(action==='start-next-call')quickMeeting(id,'');
         if(action==='refresh-next-call'){requestProximityCheck();toast('Refreshing current GPS…');}
+        if(action==='resolve-doctor-gps')resolveDoctorGpsOnline(id);
+        if(action==='use-doctor-gps')useDoctorGpsResult(Number(a.dataset.index));
         if(action==='start-proximity-call'){hideProximityCall();quickMeeting(id,'');}
         if(action==='dismiss-proximity'){proximityDismissedUntil=Date.now()+15*60*1000;hideProximityCall();}
         if(action==='show-more-doctors'){doctorRenderLimit+=60;renderDoctors();}

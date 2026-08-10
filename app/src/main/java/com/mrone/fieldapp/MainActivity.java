@@ -41,6 +41,7 @@ import com.google.android.libraries.places.api.model.OpeningHours;
 import com.google.android.libraries.places.api.model.Place;
 import com.google.android.libraries.places.api.net.PlacesClient;
 import com.google.android.libraries.places.api.net.SearchNearbyRequest;
+import com.google.android.libraries.places.api.net.SearchByTextRequest;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -335,6 +336,63 @@ public final class MainActivity extends Activity {
         }
         String script = "window.__mrNearbyPlaces(" +
                 JSONObject.quote(prefix == null ? "nearby" : prefix) + "," +
+                (error == null ? "true" : "false") + "," +
+                JSONObject.quote(rows.toString()) + "," +
+                JSONObject.quote(error == null ? "" : error) + ");";
+        runOnUiThread(() -> webView.evaluateJavascript(script, null));
+    }
+
+    private void searchDoctorPlaces(String prefix, String query) {
+        if (placesClient == null) {
+            sendDoctorPlaces(prefix, null, placesInitError);
+            return;
+        }
+        String safeQuery = query == null ? "" : query.trim();
+        if (safeQuery.isEmpty()) {
+            sendDoctorPlaces(prefix, null, "Doctor / clinic address is empty.");
+            return;
+        }
+        try {
+            List<Place.Field> fields = Arrays.asList(
+                    Place.Field.ID,
+                    Place.Field.DISPLAY_NAME,
+                    Place.Field.FORMATTED_ADDRESS,
+                    Place.Field.LOCATION,
+                    Place.Field.PRIMARY_TYPE
+            );
+            SearchByTextRequest request = SearchByTextRequest.builder(safeQuery, fields)
+                    .setMaxResultCount(5)
+                    .setRegionCode("IN")
+                    .build();
+            placesClient.searchByText(request)
+                    .addOnSuccessListener(response -> sendDoctorPlaces(prefix, response.getPlaces(), null))
+                    .addOnFailureListener(error -> sendDoctorPlaces(prefix, null,
+                            error.getMessage() == null ? "Online doctor GPS search failed." : error.getMessage()));
+        } catch (Exception error) {
+            sendDoctorPlaces(prefix, null, error.getMessage() == null ? "Online doctor GPS search failed." : error.getMessage());
+        }
+    }
+
+    private void sendDoctorPlaces(String prefix, List<Place> places, String error) {
+        JSONArray rows = new JSONArray();
+        if (places != null) {
+            for (Place place : places) {
+                try {
+                    LatLng location = place.getLocation();
+                    if (location == null) continue;
+                    JSONObject row = new JSONObject();
+                    row.put("placeId", place.getId() == null ? "" : place.getId());
+                    row.put("name", place.getDisplayName() == null ? "Clinic / hospital" : place.getDisplayName());
+                    row.put("address", place.getFormattedAddress() == null ? "" : place.getFormattedAddress());
+                    row.put("primaryType", place.getPrimaryType() == null ? "" : place.getPrimaryType());
+                    row.put("latitude", location.latitude);
+                    row.put("longitude", location.longitude);
+                    rows.put(row);
+                } catch (Exception ignored) {}
+            }
+        }
+        String script = "window.__mrDoctorPlaceResults(" +
+                JSONObject.quote(prefix == null ? "doctor-gps" : prefix) + "," +
                 (error == null ? "true" : "false") + "," +
                 JSONObject.quote(rows.toString()) + "," +
                 JSONObject.quote(error == null ? "" : error) + ");";
@@ -701,6 +759,12 @@ public final class MainActivity extends Activity {
         public void searchNearbyHospitals(String prefix, double latitude, double longitude, double radiusMeters) {
             runOnUiThread(() -> MainActivity.this.searchNearbyHospitals(
                     prefix == null ? "nearby" : prefix, latitude, longitude, radiusMeters));
+        }
+
+        @JavascriptInterface
+        public void searchDoctorPlaces(String prefix, String query) {
+            runOnUiThread(() -> MainActivity.this.searchDoctorPlaces(
+                    prefix == null ? "doctor-gps" : prefix, query));
         }
 
         @JavascriptInterface

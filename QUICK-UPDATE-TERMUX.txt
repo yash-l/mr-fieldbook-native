@@ -1,41 +1,5 @@
-cd /sdcard/Download
-
-rm -rf ~/MR-FieldBook-Practical-v20
-unzip -o MR-FieldBook-Practical-v20-Source.zip -d ~
-
 cd ~/MR-FieldBook-Native
-
-find . -mindepth 1 -maxdepth 1 \
-  ! -name '.git' \
-  -exec rm -rf {} +
-
-cp -a ~/MR-FieldBook-Practical-v20/. .
-
+unzip -o /sdcard/Download/MR-One-v1.4.1-Update.zip -d .
 git add -A
-git commit -m "Build practical MR workflow v20"
+git commit -m "Add hybrid address to GPS patch v1.4.1"
 git push
-
-COMMIT_SHA="$(git rev-parse HEAD)"
-RUN_ID=""
-
-for i in $(seq 1 40); do
-  RUN_ID="$(gh run list \
-    --workflow 'Build Android APK' \
-    --commit "$COMMIT_SHA" \
-    --limit 1 \
-    --json databaseId \
-    --jq '.[0].databaseId // empty')"
-  [ -n "$RUN_ID" ] && break
-  sleep 2
-done
-
-gh run watch "$RUN_ID" --exit-status
-
-rm -rf /sdcard/Download/MR-FieldBook-Practical-v20-APK
-mkdir -p /sdcard/Download/MR-FieldBook-Practical-v20-APK
-
-gh run download "$RUN_ID" \
-  -n 'MR-FieldBook-Practical-v20-APK' \
-  -D /sdcard/Download/MR-FieldBook-Practical-v20-APK
-
-find /sdcard/Download/MR-FieldBook-Practical-v20-APK -name '*.apk' -exec ls -lh {} \;
