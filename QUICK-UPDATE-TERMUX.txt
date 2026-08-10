@@ -1,5 +1,5 @@
 cd ~/MR-FieldBook-Native
-unzip -o /sdcard/Download/MR-One-v1.4.2-Update.zip -d .
+unzip -o /sdcard/Download/MR-One-v1.4.3-Update.zip -d .
 git add -A
-git commit -m "Add free OpenStreetMap GPS resolver v1.4.2"
+git commit -m "Add free nearby hospitals v1.4.3"
 git push

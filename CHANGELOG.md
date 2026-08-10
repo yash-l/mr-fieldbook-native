@@ -1,3 +1,13 @@
+# MR One v1.4.3
+
+## Free nearby hospitals
+- Replaced Google-only **Search live hospitals** as the default path with **Search nearby FREE** using OpenStreetMap Overpass.
+- Searches hospital, clinic and doctor-office POIs around the current GPS at 500 m / 1 km / 2 km / 5 km.
+- User selects the hospital and then the accurate saved doctor before any doctor GPS/hospital data is changed.
+- Overpass results are cached for 24 hours; saved doctor/hospital pins remain usable offline.
+- Google Places remains an optional secondary search when `PLACES_API_KEY` is configured.
+- Existing v1.4.2 free Nominatim address → GPS lookup is preserved.
+
 # MR One v1.4.2
 
 ## Free GPS resolver

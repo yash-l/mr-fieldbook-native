@@ -86,9 +86,14 @@ public final class MainActivity extends Activity {
     private String placesInitError = "Google Places API key is not configured.";
     private static final String NOMINATIM_CACHE_PREFS = "nominatim_cache_v1";
     private static final long NOMINATIM_MIN_INTERVAL_MS = 1100L;
+    private static final String OVERPASS_CACHE_PREFS = "overpass_cache_v1";
+    private static final long OVERPASS_CACHE_TTL_MS = 24L * 60L * 60L * 1000L;
+    private static final long OVERPASS_MIN_INTERVAL_MS = 1500L;
     private final ExecutorService nominatimExecutor = Executors.newSingleThreadExecutor();
     private final Object nominatimRateLock = new Object();
+    private final Object overpassRateLock = new Object();
     private long lastNominatimRequestAt = 0L;
+    private long lastOverpassRequestAt = 0L;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean webReady;
     private long lastBackPressedAt;
@@ -453,7 +458,7 @@ public final class MainActivity extends Activity {
                 connection.setRequestMethod("GET");
                 connection.setConnectTimeout(10000);
                 connection.setReadTimeout(12000);
-                connection.setRequestProperty("User-Agent", "MR-One/1.4.2 (Android; com.mrone.fieldapp)");
+                connection.setRequestProperty("User-Agent", "MR-One/1.4.3 (Android; com.mrone.fieldapp)");
                 connection.setRequestProperty("Accept", "application/json");
                 connection.setRequestProperty("Accept-Language", "en-IN,en;q=0.8");
 
@@ -508,6 +513,162 @@ public final class MainActivity extends Activity {
         String rows = json == null ? "[]" : json;
         String script = "window.__mrDoctorOpenStreetMapResults(" +
                 JSONObject.quote(prefix == null ? "doctor-gps-osm" : prefix) + "," +
+                (error == null ? "true" : "false") + "," +
+                JSONObject.quote(rows) + "," +
+                JSONObject.quote(error == null ? "" : error) + "," +
+                (cached ? "true" : "false") + ");";
+        runOnUiThread(() -> webView.evaluateJavascript(script, null));
+    }
+
+    private String overpassAddress(JSONObject tags) {
+        if (tags == null) return "";
+        String full = tags.optString("addr:full", "").trim();
+        if (!full.isEmpty()) return full;
+        ArrayList<String> parts = new ArrayList<>();
+        String house = tags.optString("addr:housenumber", "").trim();
+        String street = tags.optString("addr:street", "").trim();
+        String place = tags.optString("addr:place", "").trim();
+        String suburb = tags.optString("addr:suburb", "").trim();
+        String city = tags.optString("addr:city", tags.optString("addr:town", tags.optString("addr:village", ""))).trim();
+        String postcode = tags.optString("addr:postcode", "").trim();
+        if (!house.isEmpty() && !street.isEmpty()) parts.add(house + " " + street);
+        else {
+            if (!house.isEmpty()) parts.add(house);
+            if (!street.isEmpty()) parts.add(street);
+        }
+        if (!place.isEmpty() && !parts.contains(place)) parts.add(place);
+        if (!suburb.isEmpty() && !parts.contains(suburb)) parts.add(suburb);
+        if (!city.isEmpty() && !parts.contains(city)) parts.add(city);
+        if (!postcode.isEmpty()) parts.add(postcode);
+        return String.join(", ", parts);
+    }
+
+    private void searchNearbyOpenStreetMap(String prefix, double latitude, double longitude, double radiusMeters) {
+        if (!Double.isFinite(latitude) || !Double.isFinite(longitude) || Math.abs(latitude) > 90d || Math.abs(longitude) > 180d) {
+            sendNearbyOpenStreetMap(prefix, null, "Current GPS is invalid. Refresh GPS and retry.", false);
+            return;
+        }
+        final int safeRadius = (int) Math.max(100d, Math.min(5000d, radiusMeters));
+        final String cacheKey = String.format(java.util.Locale.US, "nearby_%.4f_%.4f_%d", latitude, longitude, safeRadius);
+        final SharedPreferences cache = getSharedPreferences(OVERPASS_CACHE_PREFS, MODE_PRIVATE);
+        String cachedEnvelope = cache.getString(cacheKey, "");
+        if (cachedEnvelope != null && !cachedEnvelope.isEmpty()) {
+            try {
+                JSONObject envelope = new JSONObject(cachedEnvelope);
+                long savedAt = envelope.optLong("savedAt", 0L);
+                String rows = envelope.optString("rows", "");
+                if (!rows.isEmpty() && System.currentTimeMillis() - savedAt < OVERPASS_CACHE_TTL_MS) {
+                    sendNearbyOpenStreetMap(prefix, rows, null, true);
+                    return;
+                }
+            } catch (Exception ignored) {}
+        }
+
+        nominatimExecutor.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                synchronized (overpassRateLock) {
+                    long now = System.currentTimeMillis();
+                    long wait = OVERPASS_MIN_INTERVAL_MS - (now - lastOverpassRequestAt);
+                    if (wait > 0) Thread.sleep(wait);
+                    lastOverpassRequestAt = System.currentTimeMillis();
+                }
+
+                String query = String.format(java.util.Locale.US,
+                        "[out:json][timeout:12];(" +
+                        "nwr(around:%d,%.6f,%.6f)[\"amenity\"~\"^(hospital|clinic|doctors)$\"];" +
+                        "nwr(around:%d,%.6f,%.6f)[\"healthcare\"~\"^(hospital|clinic|doctor)$\"];" +
+                        ");out center;",
+                        safeRadius, latitude, longitude,
+                        safeRadius, latitude, longitude);
+                byte[] body = ("data=" + URLEncoder.encode(query, StandardCharsets.UTF_8.toString())).getBytes(StandardCharsets.UTF_8);
+                URL url = new URL("https://overpass-api.de/api/interpreter");
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("POST");
+                connection.setDoOutput(true);
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(15000);
+                connection.setRequestProperty("User-Agent", "MR-One/1.4.3 (Android; com.mrone.fieldapp)");
+                connection.setRequestProperty("Accept", "application/json");
+                connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+                connection.setFixedLengthStreamingMode(body.length);
+                try (OutputStream out = connection.getOutputStream()) { out.write(body); }
+
+                int code = connection.getResponseCode();
+                if (code < 200 || code >= 300) {
+                    throw new IllegalStateException("OpenStreetMap nearby search returned HTTP " + code + ". Retry later.");
+                }
+                StringBuilder response = new StringBuilder();
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) response.append(line);
+                }
+
+                JSONObject source = new JSONObject(response.toString());
+                JSONArray elements = source.optJSONArray("elements");
+                JSONArray rows = new JSONArray();
+                java.util.HashSet<String> seen = new java.util.HashSet<>();
+                if (elements != null) {
+                    for (int i = 0; i < elements.length() && rows.length() < 60; i++) {
+                        JSONObject item = elements.optJSONObject(i);
+                        if (item == null) continue;
+                        String type = item.optString("type", "osm");
+                        String id = String.valueOf(item.optLong("id", 0L));
+                        String osmId = type + ":" + id;
+                        if (!seen.add(osmId)) continue;
+                        double lat = item.optDouble("lat", Double.NaN);
+                        double lon = item.optDouble("lon", Double.NaN);
+                        if (!Double.isFinite(lat) || !Double.isFinite(lon)) {
+                            JSONObject center = item.optJSONObject("center");
+                            if (center != null) {
+                                lat = center.optDouble("lat", Double.NaN);
+                                lon = center.optDouble("lon", Double.NaN);
+                            }
+                        }
+                        if (!Double.isFinite(lat) || !Double.isFinite(lon)) continue;
+                        JSONObject tags = item.optJSONObject("tags");
+                        if (tags == null) tags = new JSONObject();
+                        String name = tags.optString("name:en", tags.optString("name", tags.optString("operator", "Hospital / clinic"))).trim();
+                        if (name.isEmpty()) name = "Hospital / clinic";
+                        String primaryType = tags.optString("amenity", tags.optString("healthcare", "healthcare"));
+                        JSONObject row = new JSONObject();
+                        row.put("provider", "osm");
+                        row.put("osmId", osmId);
+                        row.put("name", name);
+                        row.put("address", overpassAddress(tags));
+                        row.put("primaryType", primaryType);
+                        row.put("latitude", lat);
+                        row.put("longitude", lon);
+                        JSONArray hours = new JSONArray();
+                        String opening = tags.optString("opening_hours", "").trim();
+                        if (!opening.isEmpty()) hours.put(opening);
+                        row.put("openingHours", hours);
+                        rows.put(row);
+                    }
+                }
+                String json = rows.toString();
+                JSONObject envelope = new JSONObject();
+                envelope.put("savedAt", System.currentTimeMillis());
+                envelope.put("rows", json);
+                cache.edit().putString(cacheKey, envelope.toString()).apply();
+                sendNearbyOpenStreetMap(prefix, json, null, false);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                sendNearbyOpenStreetMap(prefix, null, "Free nearby search was interrupted. Saved pins were not changed.", false);
+            } catch (Exception error) {
+                String message = error.getMessage();
+                if (message == null || message.trim().isEmpty()) message = "OpenStreetMap nearby search failed. Check internet and retry.";
+                sendNearbyOpenStreetMap(prefix, null, message, false);
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        });
+    }
+
+    private void sendNearbyOpenStreetMap(String prefix, String json, String error, boolean cached) {
+        String rows = json == null ? "[]" : json;
+        String script = "window.__mrNearbyOpenStreetMapPlaces(" +
+                JSONObject.quote(prefix == null ? "nearby-osm" : prefix) + "," +
                 (error == null ? "true" : "false") + "," +
                 JSONObject.quote(rows) + "," +
                 JSONObject.quote(error == null ? "" : error) + "," +
@@ -876,6 +1037,12 @@ public final class MainActivity extends Activity {
         public void searchDoctorOpenStreetMap(String prefix, String query) {
             MainActivity.this.searchDoctorOpenStreetMap(
                     prefix == null ? "doctor-gps-osm" : prefix, query);
+        }
+
+        @JavascriptInterface
+        public void searchNearbyOpenStreetMap(String prefix, double latitude, double longitude, double radiusMeters) {
+            MainActivity.this.searchNearbyOpenStreetMap(
+                    prefix == null ? "nearby-osm" : prefix, latitude, longitude, radiusMeters);
         }
 
         @JavascriptInterface

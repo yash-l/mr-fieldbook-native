@@ -1,3 +1,7 @@
+## v1.4.3 Free nearby hospitals
+
+Nearby hospital/clinic/doctor-office discovery now defaults to OpenStreetMap Overpass and does not require a Google API key. Searches are user-triggered and cached for 24 hours. Google Places is optional.
+
 # MR One v1.4.0
 
 Offline-first Android field companion for a medical representative. v1.4 adds real clinic-access intelligence on top of the v1.3 performance/premium workflow: Direct timed meeting, Appointment required, and Card drop → later meeting, then ranks only feasible next calls by eligibility, time window, GPS distance and travel ETA. Doctors also get a **Today’s Available** filter that applies the same clinic-access and remaining-window rules before showing a doctor.
@@ -129,11 +133,11 @@ The reports use actual app data. Official target, primary, secondary and closing
 
 ## Android build
 
-The APK builds on GitHub Actions. **No Google API key is required for doctor address → GPS.** MR One v1.4.2 uses OpenStreetMap Nominatim only when the user taps **Find GPS FREE**, caches successful query results locally, and then reuses the confirmed pin offline. Optional live Google nearby-hospital results still require `PLACES_API_KEY`; without it, saved/cached hospital pins continue to work.
+The APK builds on GitHub Actions. **No Google API key is required for the default GPS workflow.** MR One v1.4.3 uses OpenStreetMap Nominatim for manual doctor address → GPS lookup and OpenStreetMap Overpass for manual nearby hospital/clinic/doctor-office discovery. Lookup results are cached locally and confirmed pins are reused offline. Google Places remains optional.
 
 Build artifact:
 
-`MR-One-v1.4.2-APK`
+`MR-One-v1.4.3-APK`
 
 
 
@@ -146,7 +150,7 @@ Build artifact:
 - Nothing overwrites a doctor's GPS until the user checks a result and taps **Use this GPS**.
 - Confirmed latitude/longitude is stored with the doctor and reused by nearest-doctor, 50 m detection, and route planning offline.
 - Google Places remains optional as a fallback when a key is configured.
-- Live nearby-hospital discovery is not moved to public Nominatim because the public service is not intended for systematic POI/nearby crawling.
+- Nearby hospital discovery uses Overpass instead of Nominatim. It runs only when the user taps **Search nearby FREE**, with a 5 km maximum radius and a 24-hour local cache.
 - OpenStreetMap attribution is shown in the free lookup sheet.
 
 ## v14.3 Planning correction

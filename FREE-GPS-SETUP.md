@@ -1,20 +1,13 @@
-# Free GPS setup — MR One v1.4.2
+# Free GPS / Nearby setup — MR One v1.4.3
 
-No API key is required.
+No API key or billing is required for the default free path.
 
-1. Save a doctor's clinic/hospital address.
-2. Open the doctor → tap **Find GPS FREE**.
-3. MR One sends that one address to OpenStreetMap Nominatim.
-4. Check the candidate on map and tap **Use this GPS** only when it matches.
-5. The selected latitude/longitude is saved locally and reused offline.
+## Address → GPS
+Use **Find GPS FREE** on a doctor with an address. This uses OpenStreetMap Nominatim only when the user taps search. Results are cached locally.
 
-Public Nominatim rules implemented by the app:
-- manual/on-demand lookup only;
-- one native request queue;
-- minimum 1100 ms between network requests;
-- local cache for repeated identical queries;
-- application-identifying User-Agent;
-- visible OpenStreetMap attribution;
-- no autocomplete or systematic nearby-POI crawling.
+## Nearby hospitals
+Open **Nearby hospitals**, fetch current GPS, choose a radius, then tap **Search nearby FREE**. This uses OpenStreetMap Overpass to find mapped `hospital`, `clinic`, and `doctor` facilities around the current GPS. Search is manual, not continuous, and results are cached for 24 hours.
 
-Google Places remains optional for users who later configure `PLACES_API_KEY`.
+Saved doctor/hospital pins continue to work offline. Google Places is optional if a `PLACES_API_KEY` is configured.
+
+OpenStreetMap data © OpenStreetMap contributors. Public services are best-effort; do not use them for bulk or automated crawling.
