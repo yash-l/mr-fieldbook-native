@@ -17,8 +17,8 @@ android {
         applicationId 'com.mrone.fieldapp'
         minSdk 28
         targetSdk 34
-        versionCode 144
-        versionName '1.4.4'
+        versionCode 150
+        versionName '1.5.0'
         manifestPlaceholders = [PLACES_API_KEY: placesApiKey]
     }
 

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0a6c62" />
+  <meta id="themeColorMeta" name="theme-color" content="#f7f8fa" />
   <meta name="description" content="Offline intelligent MR field app with smart patch, not-met rescheduling, doctor-hospital verification, product feedback, POB and company reports." />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/icon-192.png" />
@@ -45,7 +45,7 @@
         </section>
 
         <section id="nextCallPanel" class="next-call-panel" aria-live="polite">
-          <div class="priority-head"><div><span class="eyebrow">FIELD INTELLIGENCE</span><h2>Best next call</h2><p id="nextCallStatus">Checking GPS, clinic access and timing…</p></div><button class="btn secondary compact" data-action="refresh-next-call">Refresh GPS</button></div>
+          <div class="priority-head"><div><span class="eyebrow">FIELD AI</span><h2>Best next call</h2><p id="nextCallStatus">Checking GPS, clinic access and timing…</p></div><button class="btn secondary compact" data-action="refresh-next-call">Refresh GPS</button></div>
           <div id="nextCallList" class="next-call-list"><div class="next-call-empty">Fetching current GPS…</div></div>
         </section>
 
@@ -53,7 +53,7 @@
           <div>
             <span class="eyebrow" id="todayLabel">TODAY</span>
             <h1 id="greeting">Field report ready</h1>
-            <p id="routeLabel">Search doctor, confirm hospital, pharmacy, timing and GPS, then save.</p>
+            <p id="routeLabel">See the best next doctor first. Verify location once, then work fast offline.</p>
           </div>
           <button class="hero-add" data-action="quick-log" aria-label="Log activity">＋</button>
         </div>
@@ -62,18 +62,12 @@
           <button data-action="quick-log"><span>⚕</span><strong>Doctor Call</strong><small>DCR + feedback + POB</small></button>
           <button data-action="chemist-visit"><span>Rx</span><strong>Chemist Visit</strong><small>Availability / follow-up</small></button>
           <button data-action="quick-rcpa"><span>R</span><strong>RCPA</strong><small>Prescription + competition</small></button>
-          <button data-action="manage-samples"><span>S</span><strong>Samples</strong><small>Stock + doctor issue</small></button>
-          <button data-action="manage-expenses"><span>₹</span><strong>Expenses</strong><small>TA/DA + field claims</small></button>
-          <button data-action="manage-tour-plan"><span>TP</span><strong>Tour Plan</strong><small>Area + work type</small></button>
           <button data-action="manage-appointments"><span>AP</span><strong>Appointments</strong><small>Get + confirm doctor time</small></button>
           <button data-action="quick-complete-doctor"><span>QD</span><strong>Quick Doctor Details</strong><small>Search + timing + auto GPS</small></button>
           <button data-action="area-time-plan"><span>AT</span><strong>Smart Monthly Plan</strong><small>Due doctors + timing + route</small></button>
         </div>
 
         <div class="practical-summary-strip">
-          <button data-action="manage-expenses"><small>EXPENSE TODAY</small><strong id="todayExpenseValue">₹0</strong></button>
-          <button data-action="manage-samples"><small>SAMPLES TODAY</small><strong id="todaySampleIssued">0</strong></button>
-          <button data-action="manage-tour-plan"><small>TOUR PLAN</small><strong id="todayPlanText">Not set</strong></button>
           <button data-action="manage-appointments"><small>APPOINTMENTS</small><strong id="todayAppointmentCount">0</strong></button>
           <button data-action="manage-sales"><small>SALES TARGET</small><strong id="salesProgressText">Not set</strong></button>
         </div>
@@ -90,22 +84,21 @@
         </details>
 
         <div class="machine-card">
-          <div class="machine-head"><div><span class="eyebrow">INTELLIGENCE</span><h2>MR Machine</h2><p id="machineQualityText">Reading doctor data…</p></div><button id="machineOpenBtn" class="btn primary compact">Open Machine</button></div>
+          <div class="machine-head"><div><span class="eyebrow">FIELD AI</span><h2>Verified smart patch</h2><p id="machineQualityText">Reading doctor data…</p></div><button id="machineOpenBtn" class="btn primary compact">Open Field AI</button></div>
           <div id="machineTopList" class="machine-top-list"></div>
-          <small class="machine-footnote">Patch score uses doctor timing, follow-up, not-met history, product feedback and data quality. GPS is not used for attendance or background tracking.</small>
+          <small class="machine-footnote">Local decision engine uses clinic access, visit gap, current GPS, travel feasibility and verified doctor/hospital location. No background tracking.</small>
         </div>
 
-        <div class="report-card">
-          <div class="section-head compact-head">
-            <div><h2>Daily report</h2><p id="reportPeriod">Today / August cumulative</p></div>
-            <span class="live-pill">AUTO</span>
+        <details class="report-card collapsible-card">
+          <summary class="collapse-summary"><div><span class="eyebrow dark-eye">REPORT</span><h2>Daily report</h2><p id="reportPeriod">Today / August cumulative</p></div><span class="summary-meta">AUTO <b>⌄</b></span></summary>
+          <div class="collapse-body">
+            <div id="reportKpis" class="report-kpis"></div>
+            <div class="report-actions">
+              <button id="copyReportBtn" class="btn secondary">Copy</button>
+              <button id="shareReportBtn" class="btn primary">Share / WhatsApp</button>
+            </div>
           </div>
-          <div id="reportKpis" class="report-kpis"></div>
-          <div class="report-actions">
-            <button id="copyReportBtn" class="btn secondary">Copy</button>
-            <button id="shareReportBtn" class="btn primary">Share / WhatsApp</button>
-          </div>
-        </div>
+        </details>
 
         <div class="stats-grid">
           <button class="stat-card" data-nav="doctors"><span class="stat-icon">⚕</span><strong id="doctorCount">0</strong><small>Doctors</small></button>
@@ -151,12 +144,11 @@
       </section>
 
       <section class="page" data-page="tools">
-        <div class="page-title-row"><div><h1>Tools & Profile</h1><p>Import new lists, backup and report settings</p></div></div>
+        <div class="page-title-row"><div><h1>Tools</h1><p>Only the field tools you actually use</p></div></div>
+
+        <details class="tool-group" open><summary class="collapse-summary"><div><span class="eyebrow dark-eye">FIELD WORK</span><h2>Daily tools</h2><p>Doctor work, market feedback, routing and updates</p></div><span class="summary-meta"><b>⌄</b></span></summary>
 
         <div class="settings-card-grid business-tools practical-tools">
-          <button class="settings-card action-card practical" data-action="manage-expenses"><span>₹</span><div><h3>Expenses</h3><p id="expenseToolText">TA / DA / stay / toll / other</p></div></button>
-          <button class="settings-card action-card practical" data-action="manage-samples"><span>S</span><div><h3>Samples</h3><p id="sampleToolText">Stock and doctor distribution</p></div></button>
-          <button class="settings-card action-card practical" data-action="manage-tour-plan"><span>TP</span><div><h3>Tour Program</h3><p id="tourPlanToolText">Today plan not set</p></div></button>
           <button class="settings-card action-card practical" data-action="manage-appointments"><span>AP</span><div><h3>Appointments</h3><p>Get / confirm doctor appointment + Smart Plan lock</p></div></button>
           <button class="settings-card action-card practical" data-action="quick-complete-doctor"><span>QD</span><div><h3>Quick Doctor Details</h3><p>Fast search, frequency, timing and automatic nearby GPS</p></div></button>
           <button class="settings-card action-card practical" data-action="area-time-plan"><span>AT</span><div><h3>Smart Monthly Doctor Plan</h3><p>Area + time + visit frequency + nearest route</p></div></button>
@@ -164,13 +156,16 @@
           <button class="settings-card action-card practical" data-action="manage-sales"><span>↗</span><div><h3>Target & Sales</h3><p id="salesToolText">Monthly target vs achievement</p></div></button>
           <button class="settings-card action-card" id="manageDistributorsBtn"><span>DS</span><div><h3>Distributor setup</h3><p id="distributorCountText">0 distributors</p></div></button>
           <button class="settings-card action-card" id="manageSchemesBtn"><span>%</span><div><h3>Date-wise offers</h3><p id="schemeCountText">0 active schemes</p></div></button>
-          <button class="settings-card action-card" data-action="nearby-hospitals"><span>◎</span><div><h3>Nearby hospital discovery</h3><p>Current GPS → hospital → doctor</p></div></button>
+          <button class="settings-card action-card" data-action="nearby-hospitals"><span>◎</span><div><h3>Nearby hospital discovery</h3><p>GPS → hospital → doctor → Google verify</p></div></button>
           <button class="settings-card action-card" data-action="plan-route"><span>⌖</span><div><h3>Saved hospital route</h3><p>Timing + verified hospital locations; no live GPS</p></div></button>
           <button class="settings-card action-card" data-action="new-order"><span>₹</span><div><h3>New POB order</h3><p>Chemist → distributor → products</p></div></button>
           <button class="settings-card action-card san-overlay-card" id="sanOverlayBtn"><span>CP</span><div><h3>SAN copy overlay</h3><p>Copy in SAN → floating paste box → review in MR</p></div></button>
-          <button class="settings-card action-card" data-action="app-update"><span>↑</span><div><h3>App update</h3><p id="appUpdateToolText">Check & install new MR One directly</p></div></button>
+          <button class="settings-card action-card" data-action="app-update"><span>↑</span><div><h3>App update</h3><p id="appUpdateToolText">One-tap check, download and install</p></div></button>
         </div>
+        </details>
 
+        <details class="tool-group"><summary class="collapse-summary"><div><span class="eyebrow dark-eye">DATA</span><h2>Import & backup</h2><p>Lists, backup, export and company reports</p></div><span class="summary-meta"><b>⌄</b></span></summary>
+        <div class="tool-group-body">
         <div class="settings-card import-card">
           <div class="settings-icon">XL</div>
           <div class="settings-copy"><h3>Import doctor / chemist / distributor data</h3><p>Import doctor, chemist and distributor lists anytime. Existing links, GPS, orders and meeting history stay safe.</p></div>
@@ -183,14 +178,15 @@
         <div class="settings-card-grid">
           <button class="settings-card action-card" id="exportJsonBtn"><span>⇩</span><div><h3>Full backup</h3><p>Doctors, chemists, GPS, meetings and settings</p></div></button>
           <button class="settings-card action-card" id="exportCsvBtn"><span>▦</span><div><h3>Export CSV</h3><p>Doctor, chemist and linked master</p></div></button>
-          <button class="settings-card action-card" id="exportXlsxBtn"><span>XL</span><div><h3>Export full XLSX</h3><p>Doctors, visits, RCPA, samples, expenses, sales, orders and route</p></div></button>
+          <button class="settings-card action-card" id="exportXlsxBtn"><span>XL</span><div><h3>Export full XLSX</h3><p>Doctors, visits, RCPA, sales, orders, GPS and route</p></div></button>
           <button class="settings-card action-card featured-report" id="companyReportPackBtn"><span>4X</span><div><h3>Generate 4 company files</h3><p>Lost Prescriber, MY Z & NICU, Kunjan Compilation and GUJ Sales</p></div></button>
-          <button class="settings-card action-card" id="restoreBtn"><span>⇧</span><div><h3>Restore backup</h3><p>Import MR Machine JSON</p></div></button>
+          <button class="settings-card action-card" id="restoreBtn"><span>⇧</span><div><h3>Restore backup</h3><p>Import MR One full backup</p></div></button>
           <input id="restoreInput" type="file" accept=".json" hidden />
         </div>
+        </div></details>
 
-        <form id="profileForm" class="form-card">
-          <div class="form-title"><h2>Daily report profile</h2><p>These values appear automatically in every report.</p></div>
+        <details class="form-card collapsible-card"><summary class="collapse-summary"><div><span class="eyebrow dark-eye">PROFILE</span><h2>Daily report profile</h2><p>Name, HQ, division and products</p></div><span class="summary-meta"><b>⌄</b></span></summary>
+        <form id="profileForm" class="collapsible-form">
           <div class="field-grid two">
             <label><span>Name of TM</span><input name="tmName" required /></label>
             <label><span>HQ</span><input name="hq" required /></label>
@@ -199,13 +195,22 @@
           </div>
           <label><span>Products</span><textarea name="products" rows="3" placeholder="MumMum 1, MumMum 2, Simyl MCT…"></textarea></label>
           <button class="btn primary" type="submit">Save profile</button>
-        </form>
+        </form></details>
 
-        <form id="openingForm" class="form-card">
-          <div class="form-title"><h2>Month opening balances</h2><p>Use this when starting the app mid-month. Cumulative = opening + all app logs in this month.</p></div>
+        <details class="form-card collapsible-card"><summary class="collapse-summary"><div><span class="eyebrow dark-eye">OPENING</span><h2>Month opening balances</h2><p>Use only when starting mid-month</p></div><span class="summary-meta"><b>⌄</b></span></summary>
+        <form id="openingForm" class="collapsible-form">
           <div class="field-grid two" id="openingFields"></div>
           <button class="btn primary" type="submit">Save opening balances</button>
-        </form>
+        </form></details>
+
+        <details class="form-card collapsible-card" open><summary class="collapse-summary"><div><span class="eyebrow dark-eye">APPEARANCE</span><h2>Theme & feel</h2><p>Light, Dark or pure Black + subtle haptics</p></div><span class="summary-meta"><b>⌄</b></span></summary>
+          <div class="appearance-controls">
+            <div class="theme-choice" id="themeChoice">
+              <button type="button" data-theme-choice="system">System</button><button type="button" data-theme-choice="light">Light</button><button type="button" data-theme-choice="dark">Dark</button><button type="button" data-theme-choice="black">Black</button>
+            </div>
+            <label class="toggle-line"><input id="hapticsToggle" type="checkbox" checked> Subtle touch feedback</label>
+          </div>
+        </details>
 
         <form id="pinForm" class="form-card">
           <div class="form-title"><h2>Privacy lock</h2><p>Optional 4–6 digit local PIN.</p></div>

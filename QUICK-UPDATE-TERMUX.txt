@@ -1,5 +1,21 @@
+MR One v1.5.0 — update/build/install
+
 cd ~/MR-FieldBook-Native
-unzip -o /sdcard/Download/MR-One-v1.4.3-Update.zip -d .
+unzip -o /sdcard/Download/MR-One-v1.5.0-Update.zip -d .
 git add -A
-git commit -m "Add free nearby hospitals v1.4.3"
+git diff --cached --quiet || git commit -m "Release MR One v1.5.0 focused Field AI UX"
 git push
+COMMIT_SHA="$(git rev-parse HEAD)"
+RUN_ID=""
+for i in $(seq 1 60); do
+  RUN_ID="$(gh run list --workflow 'Build Android APK' --commit "$COMMIT_SHA" --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+  [ -n "$RUN_ID" ] && break
+  sleep 2
+done
+[ -n "$RUN_ID" ] || { echo "ERROR: GitHub Actions run not found"; exit 1; }
+gh run watch "$RUN_ID" --exit-status
+rm -rf /sdcard/Download/MR-One-v1.5.0-APK
+mkdir -p /sdcard/Download/MR-One-v1.5.0-APK
+gh run download "$RUN_ID" -n 'MR-One-v1.5.0-APK' -D /sdcard/Download/MR-One-v1.5.0-APK
+gh release view v1.5.0 -R yash-l/mr-fieldbook-native
+termux-open "$(find /sdcard/Download/MR-One-v1.5.0-APK -name '*.apk' | head -1)"

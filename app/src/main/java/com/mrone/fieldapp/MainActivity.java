@@ -21,9 +21,6 @@ import android.speech.SpeechRecognizer;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Build;
-import android.os.VibrationEffect;
-import android.os.Vibrator;
-import android.os.VibratorManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
@@ -32,6 +29,7 @@ import android.content.SharedPreferences;
 import android.content.Context;
 import android.webkit.GeolocationPermissions;
 import android.webkit.JavascriptInterface;
+import android.view.HapticFeedbackConstants;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -177,22 +175,16 @@ public final class MainActivity extends Activity {
     }
 
     private void hapticFeedback(String kind) {
-        long duration = "strong".equalsIgnoreCase(kind) ? 38L : 18L;
-        try {
-            Vibrator vibrator;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                VibratorManager manager = (VibratorManager) getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
-                vibrator = manager == null ? null : manager.getDefaultVibrator();
-            } else {
-                vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
-            }
-            if (vibrator == null || !vibrator.hasVibrator()) return;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                vibrator.vibrate(VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE));
-            } else {
-                vibrator.vibrate(duration);
-            }
-        } catch (Exception ignored) {}
+        if (webView == null) return;
+        String value = kind == null ? "selection" : kind.trim().toLowerCase(java.util.Locale.US);
+        int constant = HapticFeedbackConstants.KEYBOARD_TAP;
+        if ("selection".equals(value) || "light".equals(value)) constant = HapticFeedbackConstants.CLOCK_TICK;
+        else if ("confirm".equals(value) || "success".equals(value) || "strong".equals(value)) {
+            constant = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? HapticFeedbackConstants.CONFIRM : HapticFeedbackConstants.LONG_PRESS;
+        } else if ("error".equals(value) || "warning".equals(value)) {
+            constant = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? HapticFeedbackConstants.REJECT : HapticFeedbackConstants.LONG_PRESS;
+        }
+        try { webView.performHapticFeedback(constant); } catch (Exception ignored) {}
     }
 
     @Override
@@ -474,7 +466,7 @@ public final class MainActivity extends Activity {
                 connection.setRequestMethod("GET");
                 connection.setConnectTimeout(10000);
                 connection.setReadTimeout(12000);
-                connection.setRequestProperty("User-Agent", "MR-One/1.4.4 (Android; com.mrone.fieldapp)");
+                connection.setRequestProperty("User-Agent", "MR-One/1.5.0 (Android; com.mrone.fieldapp)");
                 connection.setRequestProperty("Accept", "application/json");
                 connection.setRequestProperty("Accept-Language", "en-IN,en;q=0.8");
 
@@ -604,7 +596,7 @@ public final class MainActivity extends Activity {
                 connection.setDoOutput(true);
                 connection.setConnectTimeout(10000);
                 connection.setReadTimeout(15000);
-                connection.setRequestProperty("User-Agent", "MR-One/1.4.4 (Android; com.mrone.fieldapp)");
+                connection.setRequestProperty("User-Agent", "MR-One/1.5.0 (Android; com.mrone.fieldapp)");
                 connection.setRequestProperty("Accept", "application/json");
                 connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
                 connection.setFixedLengthStreamingMode(body.length);
@@ -973,7 +965,7 @@ public final class MainActivity extends Activity {
                 connection.setConnectTimeout(9000);
                 connection.setReadTimeout(12000);
                 connection.setRequestProperty("Accept", "application/vnd.github+json");
-                connection.setRequestProperty("User-Agent", "MR-One/1.4.4 (Android; com.mrone.fieldapp)");
+                connection.setRequestProperty("User-Agent", "MR-One/1.5.0 (Android; com.mrone.fieldapp)");
                 int code = connection.getResponseCode();
                 if (code < 200 || code >= 300) throw new IllegalStateException("Update server returned HTTP " + code + ".");
                 StringBuilder response = new StringBuilder();
