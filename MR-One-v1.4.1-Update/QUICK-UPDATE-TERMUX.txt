@@ -1,0 +1,5 @@
+cd ~/MR-FieldBook-Native
+unzip -o /sdcard/Download/MR-One-v1.4.1-Update.zip -d .
+git add -A
+git commit -m "Add hybrid address to GPS patch v1.4.1"
+git push
