@@ -60,7 +60,7 @@ jobs:
         id: meta
         shell: bash
         run: |
-          VERSION="$(sed -n "s/.*versionName[[:space:]]*['"]\([^'"]*\)['"].*/\1/p" app/build.gradle | head -1)"
+          VERSION="$(grep -m1 'versionName' app/build.gradle | grep -oE '[0-9]+(\.[0-9]+)+' | head -1)"
           if [ -z "$VERSION" ]; then
             echo "::error::Could not read versionName"
             exit 1
