@@ -1,3 +1,14 @@
+# MR One v1.4.2
+
+## Free GPS resolver
+- Added **Find GPS FREE** for doctor clinic addresses using OpenStreetMap Nominatim.
+- Google Places API key is no longer required for doctor address → GPS resolution.
+- Added single-thread 1.1-second request spacing, local query-result cache, India country filter, and visible OpenStreetMap attribution.
+- Existing GPS is never replaced until the user confirms a candidate with **Use this GPS**.
+- Saved pin is reused offline by nearest/route/proximity logic.
+- Optional Google Places fallback remains when configured.
+- Public Nominatim is intentionally not used for automated nearby-hospital crawling.
+
 # MR One v1.3.0
 
 ## Field workflow

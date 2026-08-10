@@ -46,12 +46,19 @@ import com.google.android.libraries.places.api.net.SearchByTextRequest;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
     private static final int REQUEST_FILES = 1001;
@@ -77,6 +84,11 @@ public final class MainActivity extends Activity {
     private String voicePrefix = "voice";
     private PlacesClient placesClient;
     private String placesInitError = "Google Places API key is not configured.";
+    private static final String NOMINATIM_CACHE_PREFS = "nominatim_cache_v1";
+    private static final long NOMINATIM_MIN_INTERVAL_MS = 1100L;
+    private final ExecutorService nominatimExecutor = Executors.newSingleThreadExecutor();
+    private final Object nominatimRateLock = new Object();
+    private long lastNominatimRequestAt = 0L;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean webReady;
     private long lastBackPressedAt;
@@ -399,6 +411,110 @@ public final class MainActivity extends Activity {
         runOnUiThread(() -> webView.evaluateJavascript(script, null));
     }
 
+    private String sha256Text(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest((value == null ? "" : value).getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (byte b : bytes) hex.append(String.format("%02x", b));
+            return hex.toString();
+        } catch (Exception ignored) {
+            return Integer.toHexString((value == null ? "" : value).hashCode());
+        }
+    }
+
+    private void searchDoctorOpenStreetMap(String prefix, String query) {
+        String safeQuery = query == null ? "" : query.trim();
+        if (safeQuery.isEmpty()) {
+            sendDoctorOpenStreetMap(prefix, null, "Doctor / clinic address is empty.", false);
+            return;
+        }
+        SharedPreferences cache = getSharedPreferences(NOMINATIM_CACHE_PREFS, MODE_PRIVATE);
+        String cacheKey = "q_" + sha256Text(safeQuery.toLowerCase());
+        String cached = cache.getString(cacheKey, "");
+        if (cached != null && !cached.isEmpty()) {
+            sendDoctorOpenStreetMap(prefix, cached, null, true);
+            return;
+        }
+
+        nominatimExecutor.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                synchronized (nominatimRateLock) {
+                    long now = System.currentTimeMillis();
+                    long wait = NOMINATIM_MIN_INTERVAL_MS - (now - lastNominatimRequestAt);
+                    if (wait > 0) Thread.sleep(wait);
+                    lastNominatimRequestAt = System.currentTimeMillis();
+                }
+
+                String encoded = URLEncoder.encode(safeQuery, StandardCharsets.UTF_8.toString());
+                URL url = new URL("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=in&addressdetails=1&q=" + encoded);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(12000);
+                connection.setRequestProperty("User-Agent", "MR-One/1.4.2 (Android; com.mrone.fieldapp)");
+                connection.setRequestProperty("Accept", "application/json");
+                connection.setRequestProperty("Accept-Language", "en-IN,en;q=0.8");
+
+                int code = connection.getResponseCode();
+                if (code < 200 || code >= 300) {
+                    throw new IllegalStateException("OpenStreetMap lookup returned HTTP " + code + ". Retry later.");
+                }
+                StringBuilder body = new StringBuilder();
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) body.append(line);
+                }
+
+                JSONArray source = new JSONArray(body.toString());
+                JSONArray rows = new JSONArray();
+                int max = Math.min(5, source.length());
+                for (int i = 0; i < max; i++) {
+                    JSONObject item = source.optJSONObject(i);
+                    if (item == null) continue;
+                    double lat = item.optDouble("lat", Double.NaN);
+                    double lon = item.optDouble("lon", Double.NaN);
+                    if (!Double.isFinite(lat) || !Double.isFinite(lon)) continue;
+                    JSONObject row = new JSONObject();
+                    String osmType = item.optString("osm_type", "");
+                    String osmId = item.optString("osm_id", "");
+                    row.put("provider", "osm");
+                    row.put("osmId", (osmType.isEmpty() ? "osm" : osmType) + ":" + osmId);
+                    row.put("name", item.optString("name", item.optString("display_name", "Clinic / address")));
+                    row.put("address", item.optString("display_name", ""));
+                    row.put("primaryType", item.optString("type", item.optString("category", "place")));
+                    row.put("latitude", lat);
+                    row.put("longitude", lon);
+                    rows.put(row);
+                }
+                String json = rows.toString();
+                cache.edit().putString(cacheKey, json).apply();
+                sendDoctorOpenStreetMap(prefix, json, null, false);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                sendDoctorOpenStreetMap(prefix, null, "Free GPS lookup was interrupted. Existing data was not changed.", false);
+            } catch (Exception error) {
+                String message = error.getMessage();
+                if (message == null || message.trim().isEmpty()) message = "OpenStreetMap lookup failed. Check internet and retry.";
+                sendDoctorOpenStreetMap(prefix, null, message, false);
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        });
+    }
+
+    private void sendDoctorOpenStreetMap(String prefix, String json, String error, boolean cached) {
+        String rows = json == null ? "[]" : json;
+        String script = "window.__mrDoctorOpenStreetMapResults(" +
+                JSONObject.quote(prefix == null ? "doctor-gps-osm" : prefix) + "," +
+                (error == null ? "true" : "false") + "," +
+                JSONObject.quote(rows) + "," +
+                JSONObject.quote(error == null ? "" : error) + "," +
+                (cached ? "true" : "false") + ");";
+        runOnUiThread(() -> webView.evaluateJavascript(script, null));
+    }
+
     private void requestNativeLocation(String prefix) {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             startNativeLocation(prefix);
@@ -605,6 +721,7 @@ public final class MainActivity extends Activity {
             speechRecognizer.destroy();
             speechRecognizer = null;
         }
+        nominatimExecutor.shutdownNow();
         super.onDestroy();
     }
 
@@ -753,6 +870,12 @@ public final class MainActivity extends Activity {
         @JavascriptInterface
         public boolean hasPlacesApi() {
             return placesClient != null;
+        }
+
+        @JavascriptInterface
+        public void searchDoctorOpenStreetMap(String prefix, String query) {
+            MainActivity.this.searchDoctorOpenStreetMap(
+                    prefix == null ? "doctor-gps-osm" : prefix, query);
         }
 
         @JavascriptInterface

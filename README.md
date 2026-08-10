@@ -129,12 +129,25 @@ The reports use actual app data. Official target, primary, secondary and closing
 
 ## Android build
 
-The APK builds on GitHub Actions. Optional live Google nearby-hospital results require a repository secret named `PLACES_API_KEY`. Without the key, the app and saved-hospital workflow still work.
+The APK builds on GitHub Actions. **No Google API key is required for doctor address → GPS.** MR One v1.4.2 uses OpenStreetMap Nominatim only when the user taps **Find GPS FREE**, caches successful query results locally, and then reuses the confirmed pin offline. Optional live Google nearby-hospital results still require `PLACES_API_KEY`; without it, saved/cached hospital pins continue to work.
 
 Build artifact:
 
-`MR-One-v1.4-APK`
+`MR-One-v1.4.2-APK`
 
+
+
+## v1.4.2 Free address → GPS
+
+- **Find GPS FREE** uses OpenStreetMap Nominatim; no API key or billing account is required.
+- Lookup is manual/on-demand only — no autocomplete, background scraping, or bulk querying.
+- A single-thread native queue enforces at least 1.1 seconds between public Nominatim requests.
+- Successful query results are cached locally; repeating the same address returns the cache instead of hitting the public service again.
+- Nothing overwrites a doctor's GPS until the user checks a result and taps **Use this GPS**.
+- Confirmed latitude/longitude is stored with the doctor and reused by nearest-doctor, 50 m detection, and route planning offline.
+- Google Places remains optional as a fallback when a key is configured.
+- Live nearby-hospital discovery is not moved to public Nominatim because the public service is not intended for systematic POI/nearby crawling.
+- OpenStreetMap attribution is shown in the free lookup sheet.
 
 ## v14.3 Planning correction
 - Accepted POB orders automatically create a pending distributor stop.

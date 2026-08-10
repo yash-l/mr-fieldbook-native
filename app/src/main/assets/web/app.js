@@ -3,7 +3,7 @@
 
   const STORE_KEY = 'mr-daily-auto-v3';
   const STORE_BACKUP_KEY = 'mr-daily-auto-v3-last-good';
-  const APP_VERSION = 1.41;
+  const APP_VERSION = 1.42;
   const METRICS = [
     ['calls', 'Calls'],
     ['inputs', 'Input Distributed'],
@@ -557,6 +557,7 @@ function defaultSchemes() {
   function visitMapUrl(v) { return mapUrl(v.latitude, v.longitude); }
   let pendingDoctorGpsId='';
   let pendingDoctorGpsRows=[];
+  let pendingDoctorGpsProvider='osm';
   function cleanGpsQueryPart(value){return clean(value).replace(/https?:\/\/\S+/gi,' ').replace(/\s+/g,' ').trim();}
   function doctorGpsQuery(doctor){
     if(!doctor)return '';
@@ -567,26 +568,57 @@ function defaultSchemes() {
     const primary=hospital||doctorDisplayName(doctor);
     return [primary,address,area,hq,'Gujarat','India'].filter(Boolean).join(', ');
   }
-  function resolveDoctorGpsOnline(id){
+  function osmMapUrl(lat,lng){return `https://www.openstreetmap.org/?mlat=${encodeURIComponent(lat)}&mlon=${encodeURIComponent(lng)}#map=18/${encodeURIComponent(lat)}/${encodeURIComponent(lng)}`;}
+  function hasOptionalGooglePlaces(){try{return !!window.AndroidBridge?.hasPlacesApi?.();}catch(_){return false;}}
+  function renderDoctorGpsSearchShell(doctor,query,provider){
+    const isGoogle=provider==='google';
+    openSheet('Find clinic GPS',isGoogle?'Optional Google Places lookup. Nothing is saved until you choose a result.':'FREE OpenStreetMap address lookup. Search runs only when you tap it; confirmed results are cached for offline planning.',`<div class="detail-section"><h4>${esc(doctorDisplayName(doctor))}</h4><div class="detail-address">${esc(doctor.address||doctor.hospitalAddress||'')}</div></div><div class="notice">${isGoogle?'Google Places (optional)':'OpenStreetMap / Nominatim (free)'} • Query: ${esc(query)}</div><div id="doctorGpsResults" class="card-list compact-list"><div class="empty-state"><strong>Searching online…</strong><span>${isGoogle?'Checking Google clinic/address matches.':'Checking OpenStreetMap address matches. Same query is cached after the first successful lookup.'}</span></div></div>${!isGoogle&&hasOptionalGooglePlaces()?'<div class="button-row"><button id="doctorGpsGoogleFallback" class="btn secondary" type="button">Try Google Places instead</button></div>':''}<div class="osm-attribution">${isGoogle?'Google Places is optional.':'© OpenStreetMap contributors • Nominatim public service • manual address lookup only'}</div>`);
+    $('#doctorGpsGoogleFallback')?.addEventListener('click',()=>startDoctorGpsLookup(doctor.id,'google'));
+  }
+  function startDoctorGpsLookup(id,provider='osm'){
     const doctor=doctorById(id);if(!doctor)return;
     const query=doctorGpsQuery(doctor);
     if(!clean(doctor.address||doctor.hospitalAddress)){toast('Add clinic address first.');return;}
-    if(!window.AndroidBridge?.searchDoctorPlaces){toast('Online GPS search needs the Android app build.');return;}
-    pendingDoctorGpsId=id;pendingDoctorGpsRows=[];
-    openSheet('Find clinic GPS online','Google Places searches the saved clinic/address. Nothing is saved until you choose the matching result.',`<div class="detail-section"><h4>${esc(doctorDisplayName(doctor))}</h4><div class="detail-address">${esc(doctor.address||doctor.hospitalAddress||'')}</div></div><div class="notice">Query: ${esc(query)}</div><div id="doctorGpsResults" class="card-list compact-list"><div class="empty-state"><strong>Searching online…</strong><span>Checking clinic/address matches.</span></div></div>`);
-    try{window.AndroidBridge.searchDoctorPlaces('doctor-gps',query);}catch(_){const out=$('#doctorGpsResults');if(out)out.innerHTML=empty('Could not start online GPS search.');}
+    pendingDoctorGpsId=id;pendingDoctorGpsRows=[];pendingDoctorGpsProvider=provider;
+    renderDoctorGpsSearchShell(doctor,query,provider);
+    try{
+      if(provider==='google'){
+        if(!window.AndroidBridge?.searchDoctorPlaces){throw new Error('Google Places is not available in this build.');}
+        window.AndroidBridge.searchDoctorPlaces('doctor-gps',query);
+      }else{
+        if(!window.AndroidBridge?.searchDoctorOpenStreetMap){throw new Error('Free GPS lookup needs the Android app build.');}
+        window.AndroidBridge.searchDoctorOpenStreetMap('doctor-gps-osm',query);
+      }
+    }catch(error){const out=$('#doctorGpsResults');if(out)out.innerHTML=`<div class="notice error">${esc(error?.message||'Could not start GPS search.')}</div>`;}
   }
+  function resolveDoctorGpsOnline(id){startDoctorGpsLookup(id,'osm');}
   function useDoctorGpsResult(index){
     const doctor=doctorById(pendingDoctorGpsId),row=pendingDoctorGpsRows[index];if(!doctor||!row)return;
     const lat=num(row.latitude),lng=num(row.longitude);if(!lat||!lng){toast('This result has no GPS pin.');return;}
-    doctor.latitude=lat;doctor.longitude=lng;doctor.placeId=clean(row.placeId);doctor.locationAccuracy='';doctor.locationCapturedAt=new Date().toISOString();doctor.locationSource='Google Places address match';doctor.resolvedPlaceName=clean(row.name);doctor.resolvedFormattedAddress=clean(row.address);doctor.gpsResolutionMode='online_address_confirmed';doctor.updatedAt=new Date().toISOString();
-    saveState(false);closeSheet();toast('Online clinic GPS saved. Offline planner can reuse this pin.');
+    const provider=clean(row.provider||pendingDoctorGpsProvider||'osm').toLowerCase();
+    doctor.latitude=lat;doctor.longitude=lng;doctor.locationAccuracy='';doctor.locationCapturedAt=new Date().toISOString();doctor.resolvedPlaceName=clean(row.name);doctor.resolvedFormattedAddress=clean(row.address);doctor.updatedAt=new Date().toISOString();
+    if(provider==='google'){
+      doctor.placeId=clean(row.placeId);doctor.locationSource='Google Places address match';doctor.gpsResolutionMode='google_address_confirmed';
+    }else{
+      doctor.placeId='';doctor.osmId=clean(row.osmId);doctor.locationSource='OpenStreetMap Nominatim address match';doctor.gpsResolutionMode='osm_address_confirmed_cached';
+    }
+    saveState(false);closeSheet();toast('Clinic GPS saved. Daily nearest/planner can reuse this pin offline.');
   }
+  function renderDoctorGpsRows(rows,provider){
+    const out=$('#doctorGpsResults');if(!out)return;
+    pendingDoctorGpsProvider=provider;pendingDoctorGpsRows=(rows||[]).filter(x=>num(x.latitude)&&num(x.longitude)).map(x=>({...x,provider}));
+    out.innerHTML=pendingDoctorGpsRows.length?pendingDoctorGpsRows.map((x,i)=>`<article class="record-card"><div class="record-title"><h3>${esc(x.name||'Clinic / address')}</h3><p>${esc(x.address||'Address unavailable')}</p></div><div class="tag-row"><span class="tag">${esc(provider==='google'?'Google':(x.primaryType||'OSM'))}</span><span class="tag">${esc(Number(x.latitude).toFixed(5))}, ${esc(Number(x.longitude).toFixed(5))}</span></div><div class="record-actions"><a href="${provider==='osm'?osmMapUrl(x.latitude,x.longitude):mapUrl(x.latitude,x.longitude)}" target="_blank" rel="noopener">Check map</a><button data-action="use-doctor-gps" data-index="${i}">Use this GPS</button></div></article>`).join(''):empty('No confident address match found. Keep the saved address; do not save a guessed pin.');
+  }
+  window.__mrDoctorOpenStreetMapResults=(prefix,ok,json,error,cached)=>{
+    if(prefix!=='doctor-gps-osm')return;const out=$('#doctorGpsResults');if(!out)return;
+    if(!ok){out.innerHTML=`<div class="notice error">${esc(error||'Free OpenStreetMap lookup failed. Existing address/GPS was not changed.')}</div><div class="notice">Daily planner still works offline for doctors whose GPS was already saved.</div>`;return;}
+    let rows=[];try{rows=JSON.parse(json||'[]');}catch(_){rows=[];}renderDoctorGpsRows(rows,'osm');
+    const note=document.createElement('div');note.className='notice';note.textContent=cached?'Loaded from local OpenStreetMap lookup cache — no new network request.':'OpenStreetMap result received. Choose the correct clinic/address to save its pin offline.';out.prepend(note);
+  };
   window.__mrDoctorPlaceResults=(prefix,ok,json,error)=>{
     if(prefix!=='doctor-gps')return;const out=$('#doctorGpsResults');if(!out)return;
-    if(!ok){out.innerHTML=`<div class="notice error">${esc(error||'Online GPS search failed. Keep the saved address and retry when internet is available.')}</div>`;return;}
-    let rows=[];try{rows=JSON.parse(json||'[]');}catch(_){rows=[];}pendingDoctorGpsRows=rows.filter(x=>num(x.latitude)&&num(x.longitude));
-    out.innerHTML=pendingDoctorGpsRows.length?pendingDoctorGpsRows.map((x,i)=>`<article class="record-card"><div class="record-title"><h3>${esc(x.name||'Clinic / hospital')}</h3><p>${esc(x.address||'Address unavailable')}</p></div><div class="tag-row"><span class="tag">${esc(x.primaryType||'place')}</span><span class="tag">${esc(Number(x.latitude).toFixed(5))}, ${esc(Number(x.longitude).toFixed(5))}</span></div><div class="record-actions"><a href="${mapUrl(x.latitude,x.longitude)}" target="_blank" rel="noopener">Check map</a><button data-action="use-doctor-gps" data-index="${i}">Use this GPS</button></div></article>`).join(''):empty('No confident place result found. Keep the address; do not save a guessed pin.');
+    if(!ok){out.innerHTML=`<div class="notice error">${esc(error||'Optional Google GPS search failed. Existing address/GPS was not changed.')}</div>`;return;}
+    let rows=[];try{rows=JSON.parse(json||'[]');}catch(_){rows=[];}renderDoctorGpsRows(rows,'google');
   };
 
   function latestPairVisit(doctorId, chemistId='') {
@@ -770,7 +802,7 @@ function chooseNearbyHospital(place){
 }
 function discoverNearbyHospitals(){
   nearbyPlaceCache.clear();const defaultRadius=num(state.settings.nearbyRadiusMeters)||1000;
-  openSheet('Nearby hospitals','Stand at the location, fetch GPS, then select the hospital and accurate doctor.',`<div class="location-card"><div class="location-head"><div><strong>My current location</strong><small id="nearbyLocationStatus" class="location-status loading">Preparing GPS…</small></div><button type="button" id="nearbyFetchLocation" class="btn secondary compact">Fetch GPS</button></div><a id="nearbyLocationMap" class="hidden" target="_blank" rel="noopener">View my map</a><input id="nearbyLatitude" type="hidden"><input id="nearbyLongitude" type="hidden"><input id="nearbyAccuracy" type="hidden"><input id="nearbyCapturedAt" type="hidden"></div><div class="nearby-controls"><label><span>Search radius</span><select id="nearbyRadius"><option value="500" ${defaultRadius===500?'selected':''}>500 m</option><option value="1000" ${defaultRadius===1000?'selected':''}>1 km</option><option value="2000" ${defaultRadius===2000?'selected':''}>2 km</option><option value="5000" ${defaultRadius===5000?'selected':''}>5 km</option></select></label><button id="nearbyLiveSearchBtn" type="button" class="btn primary">Search live hospitals</button></div><small id="nearbyLiveStatus" class="muted-line">Saved hospitals appear first. Live search needs a configured Google Places API key and internet.</small><div id="nearbyResults">${empty('Fetching current location…')}</div><div class="google-attribution">Powered by Google • live place results</div>`);
+  openSheet('Nearby hospitals','Stand at the location, fetch GPS, then select the hospital and accurate doctor.',`<div class="location-card"><div class="location-head"><div><strong>My current location</strong><small id="nearbyLocationStatus" class="location-status loading">Preparing GPS…</small></div><button type="button" id="nearbyFetchLocation" class="btn secondary compact">Fetch GPS</button></div><a id="nearbyLocationMap" class="hidden" target="_blank" rel="noopener">View my map</a><input id="nearbyLatitude" type="hidden"><input id="nearbyLongitude" type="hidden"><input id="nearbyAccuracy" type="hidden"><input id="nearbyCapturedAt" type="hidden"></div><div class="nearby-controls"><label><span>Search radius</span><select id="nearbyRadius"><option value="500" ${defaultRadius===500?'selected':''}>500 m</option><option value="1000" ${defaultRadius===1000?'selected':''}>1 km</option><option value="2000" ${defaultRadius===2000?'selected':''}>2 km</option><option value="5000" ${defaultRadius===5000?'selected':''}>5 km</option></select></label><button id="nearbyLiveSearchBtn" type="button" class="btn primary">Search live hospitals</button></div><small id="nearbyLiveStatus" class="muted-line">Saved/cached hospital pins work free and offline. Live Google hospital search is optional and only works when a Places key is configured.</small><div id="nearbyResults">${empty('Fetching current location…')}</div><div class="google-attribution">Saved pins work offline • Google live nearby search is optional.</div>`);
   const renderSaved=()=>{const lat=num($('#nearbyLatitude').value),lng=num($('#nearbyLongitude').value),radius=num($('#nearbyRadius').value)||1000;if(!lat||!lng)return;state.settings.nearbyRadiusMeters=radius;saveState(false);const saved=savedHospitalGroups(lat,lng,radius);saved.forEach(x=>nearbyPlaceCache.set(x.id,x));$('#nearbyResults').innerHTML=saved.length?saved.map(nearbyResultCard).join(''):empty('No saved hospital in this radius. Tap Search live hospitals.');};
   document.addEventListener('mr-location-ready',e=>{if(e.detail.prefix==='nearby')renderSaved();},{once:true});
   $('#nearbyRadius').addEventListener('change',renderSaved);$('#nearbyResults').addEventListener('click',e=>{const b=e.target.closest('[data-nearby-place-id]');if(b)chooseNearbyHospital(nearbyPlaceCache.get(b.dataset.nearbyPlaceId));});
@@ -1969,7 +2001,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
       extra=`<div class="detail-section"><h4>Preferred distributor</h4><div class="detail-address">${esc(dist?.name||'Not set')}</div></div><div class="detail-section"><h4>Doctors under this chemist</h4>${docs.length?docs.map(d=>`<button class="linked-doctor-row" data-action="view-record" data-type="doctor" data-id="${d.id}"><strong>${esc(doctorDisplayName(d))}</strong><small>${esc(inferDoctorArea(d)||'')} • ${esc(doctorType(d))}</small></button>`).join(''):empty('No doctor linked yet.')}</div>`;
     }
     const area=isDoctor?inferDoctorArea(r):(r.area||r.hq||'—');
-    const googleTools=isDoctor?`<div class="google-search-actions"><a class="btn secondary" href="${googleDoctorSearchUrl(r)}" target="_blank" rel="noopener">Google doctor name</a><a class="btn secondary" href="${googleAddressSearchUrl(r)}" target="_blank" rel="noopener">Google address</a>${clean(r.address||r.hospitalAddress)?`<button class="btn primary" data-action="resolve-doctor-gps" data-id="${esc(r.id)}">${r.latitude&&r.longitude?'Recheck GPS online':'Find GPS from address'}</button>`:''}</div>`:'';
+    const googleTools=isDoctor?`<div class="google-search-actions"><a class="btn secondary" href="${googleDoctorSearchUrl(r)}" target="_blank" rel="noopener">Google doctor name</a><a class="btn secondary" href="${googleAddressSearchUrl(r)}" target="_blank" rel="noopener">Google address</a>${clean(r.address||r.hospitalAddress)?`<button class="btn primary" data-action="resolve-doctor-gps" data-id="${esc(r.id)}">${r.latitude&&r.longitude?'Recheck GPS FREE':'Find GPS FREE'}</button>`:''}</div>`:'';
     openSheet(isDoctor?doctorDisplayName(r):r.name,isDoctor?`${doctorType(r)} • Doctor profile`:'Chemist profile',`<div class="detail-hero"><div class="avatar">${esc(initials(r.name))}</div><div><div class="title-line"><h3>${esc(isDoctor?doctorDisplayName(r):r.name)}</h3>${isDoctor?`<span class="specialty-pill">${esc(doctorType(r))}</span>`:''}</div><p>${esc(isDoctor?(ch?.name||'Chemist not linked'):`${linkedDoctorCount(r.id)} doctors linked`)}</p></div></div><div class="detail-grid"><div class="detail-box"><small>Area</small><strong>${esc(area)}</strong></div><div class="detail-box"><small>Last meeting</small><strong>${esc(prettyDate(r.lastVisit))}</strong></div></div>${isDoctor&&doctorHospital(r)?`<div class="detail-section"><h4>Hospital / clinic</h4><div class="detail-address">${esc(doctorHospital(r))}</div></div>`:''}<div class="detail-section"><h4>Address</h4><div class="detail-address">${esc(r.address||'Not added')}</div></div>${googleTools}${map?`<a class="map-main-btn" href="${map}" target="_blank" rel="noopener">Open map location</a>`:''}${extra}${r.notes?`<div class="detail-section"><h4>Note</h4><div class="note-box">${esc(r.notes)}</div></div>`:''}<div class="detail-actions"><button data-action="log-record" data-type="${type}" data-id="${id}">${isDoctor?'Start doctor call':'Log meeting'}</button><button data-action="edit-record" data-type="${type}" data-id="${id}">Edit once</button><button data-close-sheet>Close</button></div><div class="detail-section"><h4>Meeting history</h4>${history.length?history.map(miniActivity).join(''):empty('No meetings yet.')}</div>`);
   }
 

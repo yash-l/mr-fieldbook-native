@@ -43,3 +43,7 @@ A local `:app:assembleDebug` attempt could not start because this sandbox cannot
 
 ## v1.4.1 address-to-GPS regression
 See `VALIDATION-v1.4.1.md` and `TEST-30-DAY-v1.4.1.md` for the 30-day hybrid online/offline GPS validation.
+
+
+## v1.4.2 free GPS regression
+See `VALIDATION-v1.4.2.md`. The doctor address resolver now defaults to manual OpenStreetMap Nominatim with local caching and rate limiting; Google Places remains optional.
