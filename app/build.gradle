@@ -3,6 +3,11 @@ plugins {
 }
 
 def placesApiKey = project.findProperty('PLACES_API_KEY') ?: System.getenv('PLACES_API_KEY') ?: 'NO_KEY'
+def releaseKeystorePath = System.getenv('ANDROID_KEYSTORE_PATH')
+def releaseKeystorePassword = System.getenv('ANDROID_KEYSTORE_PASSWORD')
+def releaseKeyAlias = System.getenv('ANDROID_KEY_ALIAS')
+def releaseKeyPassword = System.getenv('ANDROID_KEY_PASSWORD')
+def releaseSigningReady = [releaseKeystorePath, releaseKeystorePassword, releaseKeyAlias, releaseKeyPassword].every { it != null && !it.trim().isEmpty() }
 
 android {
     namespace 'com.mrone.fieldapp'
@@ -12,14 +17,26 @@ android {
         applicationId 'com.mrone.fieldapp'
         minSdk 28
         targetSdk 34
-        versionCode 143
-        versionName '1.4.3'
+        versionCode 144
+        versionName '1.4.4'
         manifestPlaceholders = [PLACES_API_KEY: placesApiKey]
+    }
+
+    signingConfigs {
+        release {
+            if (releaseSigningReady) {
+                storeFile file(releaseKeystorePath)
+                storePassword releaseKeystorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
             minifyEnabled false
+            if (releaseSigningReady) signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }

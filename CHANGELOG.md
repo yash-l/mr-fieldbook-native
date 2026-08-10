@@ -1,3 +1,10 @@
+# MR One changelog
+
+## v1.4.4
+- Fast in-app update: Tools → App update → Check → Download & Update.
+- Stable release signing + automatic GitHub Release publishing.
+- Final Android install confirmation remains required.
+
 # MR One v1.4.3
 
 ## Free nearby hospitals

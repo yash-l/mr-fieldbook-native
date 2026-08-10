@@ -481,6 +481,7 @@ function defaultSchemes() {
   let proximityDismissedUntil = 0;
   let lastProximityDoctorId = '';
   let lastFieldLocation = null;
+  let appUpdateInfo = null;
 
   function saveState(render = true) {
     try {
@@ -1004,6 +1005,7 @@ function orderMiniCard(o){
     if($('#tourPlanToolText'))$('#tourPlanToolText').textContent=tp?`${tp.workType||'HQ'} • ${tp.area||''}`:'Today plan not set';
     if($('#rcpaToolText'))$('#rcpaToolText').textContent=`${state.rcpa.filter(x=>monthKey(x.date)===monthKey()).length} RCPA this month`;
     if($('#salesToolText'))$('#salesToolText').textContent=sale?.target?`₹${num(sale.secondary).toLocaleString('en-IN')} / ₹${num(sale.target).toLocaleString('en-IN')}`:'Monthly target not set';
+    if($('#appUpdateToolText')){const v=nativeAppVersion();$('#appUpdateToolText').textContent=`v${v.versionName||'—'} • Check & install direct`; }
   }
 
   function navigate(page) {
@@ -1027,6 +1029,45 @@ function orderMiniCard(o){
   }
   function closeSheet(){ if(window.AndroidBridge?.stopVoiceCapture)window.AndroidBridge.stopVoiceCapture();voiceHandlers?.clear?.();$('#sheetBackdrop').classList.add('hidden');$('#editorSheet').classList.add('hidden');document.body.style.overflow=''; }
   function toast(text){const el=$('#toast');el.textContent=text;el.classList.remove('hidden');clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.classList.add('hidden'),2600);}
+
+  function nativeAppVersion(){
+    try{return window.AndroidBridge?.getAppVersionInfo?JSON.parse(window.AndroidBridge.getAppVersionInfo()):{versionName:'web',versionCode:0};}
+    catch(_){return {versionName:'unknown',versionCode:0};}
+  }
+  function humanBytes(value){const n=num(value);if(!n)return '';if(n<1024*1024)return `${Math.max(1,Math.round(n/1024))} KB`;return `${(n/1024/1024).toFixed(1)} MB`;}
+  function updateStatusText(text,kind=''){
+    const el=$('#appUpdateStatus');if(!el)return;el.className=`notice${kind?` ${kind}`:''}`;el.textContent=text;
+  }
+  function manageAppUpdate(){
+    const current=nativeAppVersion();
+    openSheet('App update',`Installed MR One v${current.versionName||'unknown'}`,`<div class="note-box">Future updates can be checked and installed here. No Termux artifact download is needed after the stable-signed update channel is installed.</div><div id="appUpdateStatus" class="notice">Ready to check GitHub Release.</div><div id="appUpdateRelease" class="detail-section hidden"></div><div class="detail-actions"><button class="btn primary" id="checkAppUpdateBtn">Check update</button><button class="btn secondary hidden" id="downloadAppUpdateBtn">Download & update</button><button class="btn secondary hidden" id="installDownloadedUpdateBtn">Install downloaded update</button></div><small class="muted-line">Android always asks you to confirm the final app update. The first time, Android may also ask permission to install updates from MR One.</small>`);
+    $('#checkAppUpdateBtn')?.addEventListener('click',()=>{
+      if(!window.AndroidBridge?.checkAppUpdate){updateStatusText('Direct update requires the Android APK.','error');return;}
+      updateStatusText('Checking latest MR One release…');
+      window.AndroidBridge.checkAppUpdate();
+    });
+    $('#downloadAppUpdateBtn')?.addEventListener('click',()=>{
+      const x=appUpdateInfo;if(!x?.downloadUrl){updateStatusText('Check update first.','error');return;}
+      updateStatusText('Starting update download…');
+      window.AndroidBridge?.downloadAppUpdate?.(x.downloadUrl,x.assetName||'',x.digest||'',x.latestVersion||'');
+    });
+    $('#installDownloadedUpdateBtn')?.addEventListener('click',()=>window.AndroidBridge?.installDownloadedUpdate?.());
+    setTimeout(()=>$('#checkAppUpdateBtn')?.click(),120);
+  }
+  window.__mrAppUpdateCheck=(ok,data,error)=>{
+    if(!ok){appUpdateInfo=null;updateStatusText(error||'Could not check for update.','error');return;}
+    appUpdateInfo=data||{};
+    const current=clean(appUpdateInfo.installedVersion),latest=clean(appUpdateInfo.latestVersion),size=humanBytes(appUpdateInfo.size);
+    const box=$('#appUpdateRelease');if(box){box.classList.remove('hidden');const notes=clean(appUpdateInfo.releaseNotes).slice(0,900);box.innerHTML=`<h4>${appUpdateInfo.updateAvailable?'Update available':'You are up to date'}</h4><div class="detail-address">Installed v${esc(current||'—')} • Latest v${esc(latest||'—')}${size?` • ${esc(size)}`:''}</div>${notes?`<div class="note-box">${esc(notes)}</div>`:''}`;}
+    const download=$('#downloadAppUpdateBtn');if(download)download.classList.toggle('hidden',!appUpdateInfo.updateAvailable);
+    updateStatusText(appUpdateInfo.updateAvailable?`MR One v${latest} is ready.`:`MR One v${current} is already latest.`,appUpdateInfo.updateAvailable?'':'good');
+  };
+  window.__mrAppUpdateState=(stateName,message)=>{
+    const kind=stateName==='error'?'error':stateName==='installer'?'good':'';updateStatusText(message||stateName,kind);
+    const install=$('#installDownloadedUpdateBtn');if(install)install.classList.toggle('hidden',!['permission','ready','installer'].includes(stateName));
+    if(stateName==='downloading')toast('Update downloading…');
+    if(stateName==='installer')toast('Confirm Update in Android installer.');
+  };
 
   function doctorOptions(selected='') {
     return `<option value="">Select doctor</option>${state.doctors.slice().sort((a,b)=>doctorDisplayName(a).localeCompare(doctorDisplayName(b))).map(d=>`<option value="${esc(d.id)}" ${d.id===selected?'selected':''}>${esc(doctorDisplayName(d))} • ${esc(doctorType(d))} • ${esc(inferDoctorArea(d))}</option>`).join('')}`;
@@ -2292,6 +2333,7 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
         if(action==='area-time-plan')areaTimeDoctorPlan();
         if(action==='edit-tour-plan')editTourPlan(id);
         if(action==='manage-sales')manageSales();
+        if(action==='app-update')manageAppUpdate();
         if(action==='edit-sales')editSales();
         if(action==='add-doctor')editRecord('doctor');if(action==='add-chemist')editRecord('chemist');
         if(action==='log-record'){if(type==='doctor')quickMeeting(id,'');else quickChemistVisit(id);}

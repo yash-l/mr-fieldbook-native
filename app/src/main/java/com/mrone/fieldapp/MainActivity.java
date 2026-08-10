@@ -2,11 +2,16 @@ package com.mrone.fieldapp;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.DownloadManager;
 import android.content.ClipData;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.PackageInfo;
 import android.content.pm.ApplicationInfo;
 import android.net.Uri;
+import android.database.Cursor;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
@@ -14,6 +19,7 @@ import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Build;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
@@ -98,6 +104,14 @@ public final class MainActivity extends Activity {
     private boolean webReady;
     private long lastBackPressedAt;
     private static final long EXIT_BACK_WINDOW_MS = 1800L;
+    private static final String UPDATE_API_URL = "https://api.github.com/repos/yash-l/mr-fieldbook-native/releases/latest";
+    private static final String UPDATE_PREFS = "mr_one_update_v1";
+    private static final String UPDATE_KEY_DOWNLOAD_ID = "download_id";
+    private static final String UPDATE_KEY_DIGEST = "digest";
+    private static final String UPDATE_KEY_VERSION = "version";
+    private static final String UPDATE_KEY_AWAITING_PERMISSION = "awaiting_permission";
+    private final ExecutorService updateExecutor = Executors.newSingleThreadExecutor();
+    private BroadcastReceiver updateReceiver;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -118,6 +132,7 @@ public final class MainActivity extends Activity {
         settings.setMediaPlaybackRequiresUserGesture(false);
 
         initializePlacesClient();
+        registerUpdateReceiver();
 
         webView.addJavascriptInterface(new AndroidBridge(), "AndroidBridge");
         webView.setWebViewClient(new AppWebViewClient());
@@ -129,6 +144,7 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         mainHandler.postDelayed(this::deliverPendingSanText, 450L);
+        mainHandler.postDelayed(this::resumePendingUpdate, 700L);
     }
 
     @Override
@@ -458,7 +474,7 @@ public final class MainActivity extends Activity {
                 connection.setRequestMethod("GET");
                 connection.setConnectTimeout(10000);
                 connection.setReadTimeout(12000);
-                connection.setRequestProperty("User-Agent", "MR-One/1.4.3 (Android; com.mrone.fieldapp)");
+                connection.setRequestProperty("User-Agent", "MR-One/1.4.4 (Android; com.mrone.fieldapp)");
                 connection.setRequestProperty("Accept", "application/json");
                 connection.setRequestProperty("Accept-Language", "en-IN,en;q=0.8");
 
@@ -588,7 +604,7 @@ public final class MainActivity extends Activity {
                 connection.setDoOutput(true);
                 connection.setConnectTimeout(10000);
                 connection.setReadTimeout(15000);
-                connection.setRequestProperty("User-Agent", "MR-One/1.4.3 (Android; com.mrone.fieldapp)");
+                connection.setRequestProperty("User-Agent", "MR-One/1.4.4 (Android; com.mrone.fieldapp)");
                 connection.setRequestProperty("Accept", "application/json");
                 connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
                 connection.setFixedLengthStreamingMode(body.length);
@@ -883,7 +899,282 @@ public final class MainActivity extends Activity {
             speechRecognizer = null;
         }
         nominatimExecutor.shutdownNow();
+        updateExecutor.shutdownNow();
+        if (updateReceiver != null) {
+            try { unregisterReceiver(updateReceiver); } catch (Exception ignored) {}
+            updateReceiver = null;
+        }
         super.onDestroy();
+    }
+
+    private void registerUpdateReceiver() {
+        if (updateReceiver != null) return;
+        updateReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (!DownloadManager.ACTION_DOWNLOAD_COMPLETE.equals(intent.getAction())) return;
+                long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L);
+                long expected = getSharedPreferences(UPDATE_PREFS, MODE_PRIVATE).getLong(UPDATE_KEY_DOWNLOAD_ID, -1L);
+                if (id > 0L && id == expected) handleUpdateDownload(id, true);
+            }
+        };
+        IntentFilter filter = new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(updateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(updateReceiver, filter);
+        }
+    }
+
+    private JSONObject installedVersionJson() {
+        JSONObject out = new JSONObject();
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            out.put("versionName", info.versionName == null ? "" : info.versionName);
+            long code = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? info.getLongVersionCode() : info.versionCode;
+            out.put("versionCode", code);
+            out.put("packageName", getPackageName());
+        } catch (Exception error) {
+            try {
+                out.put("versionName", "");
+                out.put("versionCode", 0);
+                out.put("packageName", getPackageName());
+            } catch (Exception ignored) {}
+        }
+        return out;
+    }
+
+    private static String normalizeVersion(String value) {
+        String v = value == null ? "" : value.trim();
+        if (v.startsWith("v") || v.startsWith("V")) v = v.substring(1);
+        return v.replaceAll("[^0-9.].*$", "");
+    }
+
+    private static int compareVersions(String left, String right) {
+        String[] a = normalizeVersion(left).split("\\.");
+        String[] b = normalizeVersion(right).split("\\.");
+        int size = Math.max(a.length, b.length);
+        for (int i = 0; i < size; i++) {
+            int x = 0, y = 0;
+            try { if (i < a.length && !a[i].isEmpty()) x = Integer.parseInt(a[i]); } catch (Exception ignored) {}
+            try { if (i < b.length && !b[i].isEmpty()) y = Integer.parseInt(b[i]); } catch (Exception ignored) {}
+            if (x != y) return Integer.compare(x, y);
+        }
+        return 0;
+    }
+
+    private void checkForAppUpdate() {
+        updateExecutor.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                URL url = new URL(UPDATE_API_URL);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(9000);
+                connection.setReadTimeout(12000);
+                connection.setRequestProperty("Accept", "application/vnd.github+json");
+                connection.setRequestProperty("User-Agent", "MR-One/1.4.4 (Android; com.mrone.fieldapp)");
+                int code = connection.getResponseCode();
+                if (code < 200 || code >= 300) throw new IllegalStateException("Update server returned HTTP " + code + ".");
+                StringBuilder response = new StringBuilder();
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) response.append(line);
+                }
+                JSONObject release = new JSONObject(response.toString());
+                String latestVersion = normalizeVersion(release.optString("tag_name", release.optString("name", "")));
+                JSONArray assets = release.optJSONArray("assets");
+                JSONObject apkAsset = null;
+                if (assets != null) {
+                    for (int i = 0; i < assets.length(); i++) {
+                        JSONObject asset = assets.optJSONObject(i);
+                        if (asset != null && asset.optString("name", "").toLowerCase(java.util.Locale.US).endsWith(".apk")) {
+                            apkAsset = asset;
+                            if (asset.optString("name", "").startsWith("MR-One-v")) break;
+                        }
+                    }
+                }
+                if (latestVersion.isEmpty()) throw new IllegalStateException("Latest release version is missing.");
+                if (apkAsset == null) throw new IllegalStateException("Latest GitHub release has no APK yet.");
+                JSONObject installed = installedVersionJson();
+                String installedVersion = installed.optString("versionName", "");
+                JSONObject result = new JSONObject();
+                result.put("installedVersion", installedVersion);
+                result.put("installedVersionCode", installed.optLong("versionCode", 0L));
+                result.put("latestVersion", latestVersion);
+                result.put("updateAvailable", compareVersions(latestVersion, installedVersion) > 0);
+                result.put("assetName", apkAsset.optString("name", "MR-One-update.apk"));
+                result.put("downloadUrl", apkAsset.optString("browser_download_url", ""));
+                result.put("size", apkAsset.optLong("size", 0L));
+                result.put("digest", apkAsset.optString("digest", ""));
+                result.put("releaseNotes", release.optString("body", ""));
+                result.put("publishedAt", release.optString("published_at", ""));
+                result.put("releaseUrl", release.optString("html_url", ""));
+                sendAppUpdateCheck(true, result, "");
+            } catch (Exception error) {
+                sendAppUpdateCheck(false, new JSONObject(), error.getMessage() == null ? "Could not check for update." : error.getMessage());
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        });
+    }
+
+    private void sendAppUpdateCheck(boolean ok, JSONObject data, String error) {
+        String script = "if(window.__mrAppUpdateCheck){window.__mrAppUpdateCheck(" +
+                (ok ? "true" : "false") + "," + (data == null ? "{}" : data.toString()) + "," +
+                JSONObject.quote(error == null ? "" : error) + ");}";
+        runOnUiThread(() -> { if (webView != null) webView.evaluateJavascript(script, null); });
+    }
+
+    private void sendAppUpdateState(String state, String message) {
+        String script = "if(window.__mrAppUpdateState){window.__mrAppUpdateState(" +
+                JSONObject.quote(state == null ? "" : state) + "," + JSONObject.quote(message == null ? "" : message) + ");}";
+        runOnUiThread(() -> { if (webView != null) webView.evaluateJavascript(script, null); });
+    }
+
+    private static String safeApkName(String name, String version) {
+        String candidate = name == null ? "" : name.trim();
+        if (!candidate.toLowerCase(java.util.Locale.US).endsWith(".apk")) candidate = "MR-One-v" + normalizeVersion(version) + ".apk";
+        candidate = candidate.replaceAll("[^A-Za-z0-9._-]", "-");
+        return candidate.isEmpty() ? "MR-One-update.apk" : candidate;
+    }
+
+    private void startAppUpdateDownload(String downloadUrl, String assetName, String digest, String version) {
+        runOnUiThread(() -> {
+            try {
+                Uri uri = Uri.parse(downloadUrl == null ? "" : downloadUrl);
+                if (!"https".equalsIgnoreCase(uri.getScheme()) || !"github.com".equalsIgnoreCase(uri.getHost())) {
+                    throw new IllegalArgumentException("Update URL is not a trusted GitHub release URL.");
+                }
+                String fileName = safeApkName(assetName, version);
+                java.io.File dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                if (dir != null) {
+                    java.io.File old = new java.io.File(dir, fileName);
+                    if (old.exists()) old.delete();
+                }
+                DownloadManager.Request request = new DownloadManager.Request(uri)
+                        .setTitle("MR One v" + normalizeVersion(version))
+                        .setDescription("Downloading signed app update")
+                        .setMimeType("application/vnd.android.package-archive")
+                        .setAllowedOverMetered(true)
+                        .setAllowedOverRoaming(false)
+                        .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                        .setDestinationInExternalFilesDir(MainActivity.this, Environment.DIRECTORY_DOWNLOADS, fileName);
+                DownloadManager manager = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                if (manager == null) throw new IllegalStateException("Android download service is unavailable.");
+                long id = manager.enqueue(request);
+                getSharedPreferences(UPDATE_PREFS, MODE_PRIVATE).edit()
+                        .putLong(UPDATE_KEY_DOWNLOAD_ID, id)
+                        .putString(UPDATE_KEY_DIGEST, digest == null ? "" : digest)
+                        .putString(UPDATE_KEY_VERSION, normalizeVersion(version))
+                        .putBoolean(UPDATE_KEY_AWAITING_PERMISSION, false)
+                        .apply();
+                sendAppUpdateState("downloading", "Update download started. Android notification shows progress.");
+            } catch (Exception error) {
+                sendAppUpdateState("error", error.getMessage() == null ? "Could not start update download." : error.getMessage());
+            }
+        });
+    }
+
+    private void resumePendingUpdate() {
+        SharedPreferences prefs = getSharedPreferences(UPDATE_PREFS, MODE_PRIVATE);
+        long id = prefs.getLong(UPDATE_KEY_DOWNLOAD_ID, -1L);
+        if (id <= 0L) return;
+        if (prefs.getBoolean(UPDATE_KEY_AWAITING_PERMISSION, false) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && getPackageManager().canRequestPackageInstalls()) {
+            prefs.edit().putBoolean(UPDATE_KEY_AWAITING_PERMISSION, false).apply();
+            handleUpdateDownload(id, false);
+        }
+    }
+
+    private void handleUpdateDownload(long id, boolean fromReceiver) {
+        DownloadManager manager = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+        if (manager == null) return;
+        DownloadManager.Query query = new DownloadManager.Query().setFilterById(id);
+        try (Cursor cursor = manager.query(query)) {
+            if (cursor == null || !cursor.moveToFirst()) return;
+            int status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+            if (status == DownloadManager.STATUS_FAILED) {
+                int reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON));
+                sendAppUpdateState("error", "Update download failed (" + reason + "). Retry from App update.");
+                return;
+            }
+            if (status != DownloadManager.STATUS_SUCCESSFUL) {
+                if (!fromReceiver) sendAppUpdateState("downloading", "Update is still downloading.");
+                return;
+            }
+        } catch (Exception error) {
+            sendAppUpdateState("error", "Could not read downloaded update.");
+            return;
+        }
+        Uri uri = manager.getUriForDownloadedFile(id);
+        if (uri == null) {
+            sendAppUpdateState("error", "Downloaded APK could not be opened.");
+            return;
+        }
+        SharedPreferences prefs = getSharedPreferences(UPDATE_PREFS, MODE_PRIVATE);
+        String expectedDigest = prefs.getString(UPDATE_KEY_DIGEST, "");
+        updateExecutor.execute(() -> {
+            try {
+                if (expectedDigest != null && !expectedDigest.trim().isEmpty()) {
+                    String expected = expectedDigest.trim();
+                    if (expected.toLowerCase(java.util.Locale.US).startsWith("sha256:")) expected = expected.substring(7);
+                    String actual = sha256Uri(uri);
+                    if (!expected.equalsIgnoreCase(actual)) {
+                        manager.remove(id);
+                        sendAppUpdateState("error", "Downloaded APK verification failed. File removed; retry update.");
+                        return;
+                    }
+                }
+                runOnUiThread(() -> launchInstallerOrPermission(uri));
+            } catch (Exception error) {
+                sendAppUpdateState("error", "Could not verify downloaded APK.");
+            }
+        });
+    }
+
+    private String sha256Uri(Uri uri) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new IllegalStateException("Downloaded APK is unreadable.");
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = in.read(buffer)) >= 0) if (read > 0) digest.update(buffer, 0, read);
+        }
+        StringBuilder hex = new StringBuilder();
+        for (byte item : digest.digest()) hex.append(String.format(java.util.Locale.US, "%02x", item & 0xff));
+        return hex.toString();
+    }
+
+    private void launchInstallerOrPermission(Uri uri) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
+            getSharedPreferences(UPDATE_PREFS, MODE_PRIVATE).edit().putBoolean(UPDATE_KEY_AWAITING_PERMISSION, true).apply();
+            sendAppUpdateState("permission", "Allow MR One to install this update once, then return to the app.");
+            try {
+                Intent settingsIntent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()));
+                startActivity(settingsIntent);
+            } catch (Exception error) {
+                sendAppUpdateState("error", "Open Android settings and allow Install unknown apps for MR One.");
+            }
+            return;
+        }
+        try {
+            Intent install = new Intent(Intent.ACTION_INSTALL_PACKAGE);
+            install.setData(uri);
+            install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(install);
+            sendAppUpdateState("installer", "Downloaded and verified. Confirm Update on the Android installer.");
+        } catch (Exception error) {
+            sendAppUpdateState("error", "Android installer could not open the downloaded APK.");
+        }
+    }
+
+    private void installPendingDownloadedUpdate() {
+        long id = getSharedPreferences(UPDATE_PREFS, MODE_PRIVATE).getLong(UPDATE_KEY_DOWNLOAD_ID, -1L);
+        if (id <= 0L) {
+            sendAppUpdateState("error", "No downloaded update is waiting.");
+            return;
+        }
+        handleUpdateDownload(id, false);
     }
 
     private void openExternal(String url) {
@@ -957,6 +1248,26 @@ public final class MainActivity extends Activity {
         @JavascriptInterface
         public boolean isNativeApp() {
             return true;
+        }
+
+        @JavascriptInterface
+        public String getAppVersionInfo() {
+            return installedVersionJson().toString();
+        }
+
+        @JavascriptInterface
+        public void checkAppUpdate() {
+            MainActivity.this.checkForAppUpdate();
+        }
+
+        @JavascriptInterface
+        public void downloadAppUpdate(String downloadUrl, String assetName, String digest, String version) {
+            MainActivity.this.startAppUpdateDownload(downloadUrl, assetName, digest, version);
+        }
+
+        @JavascriptInterface
+        public void installDownloadedUpdate() {
+            MainActivity.this.installPendingDownloadedUpdate();
         }
 
         @JavascriptInterface
