@@ -192,6 +192,15 @@
   function latestDoctorVisit(doctorId,metOnly=false){return doctorVisitRows(doctorId).filter(v=>!metOnly||!NOT_MET_OUTCOMES.has(v.outcome)).slice(-1)[0]||null;}
   function recentNotMetCount(doctorId,windowDays=60){const cutoff=new Date();cutoff.setDate(cutoff.getDate()-windowDays);return doctorVisitRows(doctorId).filter(v=>NOT_MET_OUTCOMES.has(v.outcome)&&new Date(v.date)>=cutoff).length;}
   function successfulDoctorVisits(doctorId){return doctorVisitRows(doctorId).filter(v=>!NOT_MET_OUTCOMES.has(v.outcome));}
+  function effectiveSuccessfulDoctorVisits(doctor){
+    const rows=successfulDoctorVisits(doctor.id).slice();
+    const firstDate=dateOnly(doctor?.firstMeetingDate);
+    if(doctor?.firstMeetingDone&&firstDate&&!rows.some(v=>dateOnly(v.date)===firstDate)){
+      rows.push({id:`first-meeting:${doctor.id}`,doctorId:doctor.id,date:firstDate,outcome:'met',outcomeLabel:'Doctor met',source:'firstMeetingDone'});
+      rows.sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+    }
+    return rows;
+  }
   function doctorVisitPolicy(doctor){
     const target=Math.max(1,Math.min(4,Math.round(num(doctor?.monthlyVisitTarget)||2)));
     const automaticGap=target===1?0:target===2?15:target===3?9:7;
@@ -199,7 +208,7 @@
     return {target,gap,label:`${target}× / month${gap?` • ${gap}d gap`:''}`};
   }
   function doctorEligibilityForDate(doctor,date=localISODate()){
-    const policy=doctorVisitPolicy(doctor),month=monthKey(date),rows=successfulDoctorVisits(doctor.id).filter(v=>monthKey(v.date)===month),count=rows.length,last=successfulDoctorVisits(doctor.id).slice(-1)[0]||null;
+    const policy=doctorVisitPolicy(doctor),month=monthKey(date),allRows=effectiveSuccessfulDoctorVisits(doctor),rows=allRows.filter(v=>monthKey(v.date)===month),count=rows.length,last=allRows.slice(-1)[0]||null;
     if(count>=policy.target)return {eligible:false,reason:`${count}/${policy.target} monthly visits completed`,count,...policy,last};
     if(policy.gap&&last&&daysBetween(last.date,date)<policy.gap)return {eligible:false,reason:`Gap ${daysBetween(last.date,date)}/${policy.gap} days`,count,...policy,last};
     return {eligible:true,reason:`Visit ${count+1}/${policy.target} due`,count,...policy,last};
@@ -616,7 +625,7 @@ function routeCandidates(lat,lng,includeVisited=false){
 function groupedHospitalRouteCandidates(lat,lng,includeVisited=false){
   const visited=new Set(rowsForDay().map(v=>v.doctorId).filter(Boolean)),groups=new Map();
   state.doctors.forEach(doctor=>{
-    const eligibility=doctorEligibilityForDate(doctor);const slot=todaySlot(doctor);if(!eligibility.eligible||!slot||!num(doctor.latitude)||!num(doctor.longitude)||(visited.has(doctor.id)&&!includeVisited))return;
+    const eligibility=doctorEligibilityForDate(doctor),appointment=appointmentForDoctorDate(doctor.id,localISODate(),true),slot=appointmentSlot(appointment)||todaySlot(doctor);if((!eligibility.eligible&&!appointment)||!slot||!num(doctor.latitude)||!num(doctor.longitude)||(visited.has(doctor.id)&&!includeVisited))return;
     const key=doctor.placeId?`place:${doctor.placeId}`:`gps:${num(doctor.latitude).toFixed(4)},${num(doctor.longitude).toFixed(4)}:${norm(doctorHospital(doctor))}`;
     if(!groups.has(key))groups.set(key,{key,type:'hospital',hospital:doctorHospital(doctor)||doctorDisplayName(doctor),address:doctor.address||doctor.area||'',latitude:num(doctor.latitude),longitude:num(doctor.longitude),doctors:[]});
     groups.get(key).doctors.push({doctor,slot});
@@ -1823,7 +1832,7 @@ function viewOrder(id){
   $('#deleteOrderBtn').addEventListener('click',()=>{if(!confirm('Delete order and its POB activity?'))return;state.orders=state.orders.filter(x=>x.id!==id);state.visits=state.visits.filter(v=>v.orderId!==id);saveState();closeSheet();});
 }
 function planTodayRoute(){
-  const eligible=state.doctors.filter(d=>todaySlot(d)&&num(d.latitude)&&num(d.longitude)),distributorStops=pendingDistributorStops(),preferred=smartPatchCandidates(30).find(x=>eligible.some(d=>d.id===x.doctor.id))?.doctor||eligible[0]||null;
+  const eligible=state.doctors.filter(d=>{const appointment=appointmentForDoctorDate(d.id,localISODate(),true),slot=appointmentSlot(appointment)||todaySlot(d),eligibility=doctorEligibilityForDate(d);return slot&&num(d.latitude)&&num(d.longitude)&&(eligibility.eligible||appointment);}),distributorStops=pendingDistributorStops(),preferred=smartPatchCandidates(30).find(x=>eligible.some(d=>d.id===x.doctor.id))?.doctor||eligible[0]||null;
   openSheet('Today location-wise planning','Strict nearest-chain mode: selected start → nearest next stop → nearest from that stop. Timing conflicts are warnings only.',`${eligible.length?`<label class="sheet-form"><span>Start from saved doctor / hospital</span><select id="routeStartDoctor">${eligible.map(d=>`<option value="${esc(d.id)}" ${d.id===preferred?.id?'selected':''}>${esc(doctorDisplayName(d))}</option>`).join('')}</select></label><label class="toggle-line"><input id="includeVisitedRoute" type="checkbox"> Include doctors already called today</label><div id="routeResult"></div>`:empty('No doctor has both today timing and verified hospital GPS. Distributor planning is still shown below.')}<div id="distributorPlanResult"></div>`);
   const renderDistributors=()=>{$('#distributorPlanResult').innerHTML=`<div class="detail-section"><h4>Accepted-order distributor stops</h4>${distributorStops.length?distributorStops.map((x,i)=>`<div class="route-stop ${x.mapReady?'':'route-risk'}"><span>${i+1}</span><div><strong>${esc(x.distributor.name)}</strong><small>${esc(`₹${x.totalValue.toLocaleString('en-IN')} • ${x.orders.length} order(s) • ${x.chemists.join(', ')||'Chemist pending'} • ${x.address||'Address missing'}${x.mapReady?' • map pin ready':' • add map pin in Distributor'}`)}</small></div>${entityMapUrl(x.distributor)?`<a class="btn secondary compact" href="${entityMapUrl(x.distributor)}" target="_blank" rel="noopener">Map</a>`:''}</div>`).join(''):empty('No accepted order is pending fulfilment.')}</div>`;};
   renderDistributors();if(!eligible.length)return;
