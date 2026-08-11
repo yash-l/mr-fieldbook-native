@@ -931,10 +931,8 @@ function orderMiniCard(o){
 
   function selectedRouteDoctors(){return [...selectedRouteDoctorIds].map(doctorById).filter(Boolean);}
   let selectedRouteGpsListener=null;
-  let selectedRouteCursor=0;
   function setSelectedRouteDoctorOrder(doctors){
     selectedRouteDoctorIds=new Set(doctors.map(d=>d.id));
-    if(selectedRouteCursor>=doctors.length)selectedRouteCursor=Math.max(0,doctors.length-1);
   }
   function moveSelectedRouteDoctor(id,delta){
     const list=selectedRouteDoctors(),from=list.findIndex(d=>d.id===id);if(from<0)return;
@@ -958,8 +956,8 @@ function orderMiniCard(o){
   }
   function startDoctorRouteSelection(){doctorRouteSelectMode=true;navigate('doctors');renderDoctorRouteSelectionUi();toast('Filter/search, then select every doctor you want. One full route list will keep all selections.');}
   function toggleDoctorRouteMode(){doctorRouteSelectMode=!doctorRouteSelectMode;renderDoctors();}
-  function toggleSelectedRouteDoctor(id){if(!doctorById(id))return;selectedRouteDoctorIds.has(id)?selectedRouteDoctorIds.delete(id):selectedRouteDoctorIds.add(id);selectedRouteCursor=Math.min(selectedRouteCursor,Math.max(0,selectedRouteDoctorIds.size-1));renderDoctors();}
-  function clearSelectedRouteDoctors(){selectedRouteDoctorIds.clear();selectedRouteCursor=0;renderDoctors();}
+  function toggleSelectedRouteDoctor(id){if(!doctorById(id))return;selectedRouteDoctorIds.has(id)?selectedRouteDoctorIds.delete(id):selectedRouteDoctorIds.add(id);renderDoctors();}
+  function clearSelectedRouteDoctors(){selectedRouteDoctorIds.clear();renderDoctors();}
   function selectShownRouteDoctors(){lastRenderedDoctorIds.forEach(id=>selectedRouteDoctorIds.add(id));doctorRouteSelectMode=true;renderDoctors();}
   function doctorRouteAddress(doctor){return clean(doctor?.address||doctor?.hospitalAddress||'');}
   function doctorRouteGoogleQuery(doctor){
@@ -984,33 +982,52 @@ function orderMiniCard(o){
     return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}&travelmode=driving&dir_action=navigate`;
   }
   function selectedRouteDistance(order,start){if(!order.length||!start)return 0;let total=0,lat=num(start.latitude),lng=num(start.longitude),seen=false;for(const d of order){if(!doctorRouteHasGps(d))continue;total+=smartRoadKm(lat,lng,d.latitude,d.longitude);lat=num(d.latitude);lng=num(d.longitude);seen=true;}return seen?total:0;}
+  function selectedDoctorsGoogleMapsUrl(doctors){
+    const list=(doctors||[]).filter(Boolean);
+    if(!list.length||list.length>9||list.some(d=>!doctorRouteRoutable(d)))return '';
+    if(list.length===1)return doctorRouteNavigateUrl(list[0]);
+    const first=list[0],last=list[list.length-1],middle=list.slice(1,-1);
+    const origin=doctorRouteOperand(first),destination=doctorRouteOperand(last);
+    if(!origin||!destination)return '';
+    const params=[`api=1`,`origin=${encodeURIComponent(origin)}`,`destination=${encodeURIComponent(destination)}`];
+    if(clean(first.placeId))params.push(`origin_place_id=${encodeURIComponent(clean(first.placeId))}`);
+    if(clean(last.placeId))params.push(`destination_place_id=${encodeURIComponent(clean(last.placeId))}`);
+    if(middle.length){
+      params.push(`waypoints=${encodeURIComponent(middle.map(doctorRouteOperand).join('|'))}`);
+      if(middle.every(d=>clean(d.placeId)))params.push(`waypoint_place_ids=${encodeURIComponent(middle.map(d=>clean(d.placeId)).join('|'))}`);
+    }
+    params.push('travelmode=driving');
+    return `https://www.google.com/maps/dir/?${params.join('&')}`;
+  }
   function rerenderSelectedRouteFromSheet(){
     const lat=num($('#selectedrouteLatitude')?.value),lng=num($('#selectedrouteLongitude')?.value),accuracy=num($('#selectedrouteAccuracy')?.value);
     if(lat&&lng)renderSelectedDoctorRoutePreview(lat,lng,accuracy);else renderSelectedDoctorRoutePreview(0,0,0);
-  }
-  function changeSelectedRouteCursor(delta){
-    const list=selectedRouteDoctors();if(!list.length)return;
-    selectedRouteCursor=Math.max(0,Math.min(list.length-1,selectedRouteCursor+delta));rerenderSelectedRouteFromSheet();
   }
   function renderSelectedDoctorRoutePreview(latitude,longitude,accuracy=0){
     const out=$('#selectedRouteResults');if(!out)return;
     const selected=selectedRouteDoctors();
     if(!selected.length){out.innerHTML=empty('No doctors selected.');return;}
-    selectedRouteCursor=Math.max(0,Math.min(selected.length-1,selectedRouteCursor));
     const routable=selected.filter(doctorRouteRoutable),needsLocation=selected.filter(d=>!doctorRouteRoutable(d));
     const start=latitude&&longitude?{latitude:num(latitude),longitude:num(longitude)}:null,totalKm=start?selectedRouteDistance(selected,start):0;
-    const current=selected[selectedRouteCursor],currentReady=doctorRouteRoutable(current),currentNavigate=currentReady?doctorRouteNavigateUrl(current):'';
+    const googleMultiUrl=selectedDoctorsGoogleMapsUrl(selected),withinGoogleLimit=selected.length<=9;
     const routeRows=selected.map((d,i)=>{
-      const v=doctorLocationVerification(d),hasGps=doctorRouteHasGps(d),hasAddress=doctorRouteHasAddress(d),mode=hasGps?(v.verified?'Verified GPS':'Saved GPS'):(hasAddress?'Address':'Find address'),query=doctorRouteGoogleQuery(d),nav=doctorRouteNavigateUrl(d),active=i===selectedRouteCursor;
-      return `<div class="route-stop ${active?'active':''} ${!doctorRouteRoutable(d)?'route-risk':''}"><span>${i+1}</span><div><strong>${esc(doctorDisplayName(d))}</strong><small>${esc([mode,doctorHospital(d),doctorRouteAddress(d)||inferDoctorArea(d),doctorType(d)].filter(Boolean).join(' • '))}</small><em>${esc(query)}</em></div><div class="route-stop-actions"><button class="btn secondary compact" data-action="route-move-up" data-id="${esc(d.id)}" ${i===0?'disabled':''}>↑</button><button class="btn secondary compact" data-action="route-move-down" data-id="${esc(d.id)}" ${i===selected.length-1?'disabled':''}>↓</button><button class="btn secondary compact" data-action="route-move-to" data-id="${esc(d.id)}">Move</button><a class="btn secondary compact" href="${doctorRouteGoogleUrl(d)}" target="_blank" rel="noopener">${hasAddress||hasGps?'Google check':'Find address'}</a>${nav?`<a class="btn primary compact" href="${nav}" target="_blank" rel="noopener">Navigate</a>`:''}</div></div>`;
+      const v=doctorLocationVerification(d),hasGps=doctorRouteHasGps(d),hasAddress=doctorRouteHasAddress(d),mode=hasGps?(v.verified?'Verified GPS':'Saved GPS'):(hasAddress?'Address':'Find address'),query=doctorRouteGoogleQuery(d);
+      return `<div class="route-stop ${!doctorRouteRoutable(d)?'route-risk':''}"><span>${i<26?String.fromCharCode(65+i):String(i+1)}</span><div><strong>${esc(doctorDisplayName(d))}</strong><small>${esc([mode,doctorHospital(d),doctorRouteAddress(d)||inferDoctorArea(d),doctorType(d)].filter(Boolean).join(' • '))}</small><em>${esc(query)}</em></div><div class="route-stop-actions"><button class="btn secondary compact" data-action="route-move-up" data-id="${esc(d.id)}" ${i===0?'disabled':''}>↑</button><button class="btn secondary compact" data-action="route-move-down" data-id="${esc(d.id)}" ${i===selected.length-1?'disabled':''}>↓</button><button class="btn secondary compact" data-action="route-move-to" data-id="${esc(d.id)}">Move</button><a class="btn secondary compact" href="${doctorRouteGoogleUrl(d)}" target="_blank" rel="noopener">${hasAddress||hasGps?'Google check':'Find address'}</a></div></div>`;
     }).join('');
-    const nextCard=`<div class="detail-section"><h4>Next stop • ${esc(selectedRouteCursor+1)} / ${esc(selected.length)}</h4><div class="note-box"><strong>${esc(doctorDisplayName(current))}</strong><br>${esc([doctorHospital(current),doctorRouteAddress(current)||inferDoctorArea(current),doctorType(current)].filter(Boolean).join(' • '))}</div><div class="button-row"><button class="btn secondary" data-action="route-prev" ${selectedRouteCursor===0?'disabled':''}>Previous</button>${currentNavigate?`<a class="btn primary" href="${currentNavigate}" target="_blank" rel="noopener">Navigate next in Google Maps</a>`:`<a class="btn primary" href="${doctorRouteGoogleUrl(current)}" target="_blank" rel="noopener">Find / confirm address</a>`}<button class="btn secondary" data-action="route-next" ${selectedRouteCursor===selected.length-1?'disabled':''}>Done → Next</button></div></div>`;
-    out.innerHTML=`<div class="manager-summary"><div><small>FULL ROUTE</small><strong>${esc(selected.length)}</strong></div><div><small>READY</small><strong>${esc(routable.length)}</strong></div><div><small>NEEDS ADDRESS</small><strong>${esc(needsLocation.length)}</strong></div></div><div class="notice"><strong>One route, never split.</strong> Your selected order is the route order. Use ↑ / ↓ / Move to arrange all ${esc(selected.length)} doctors. Google Maps is opened only for the current next doctor, while MR One keeps the complete route intact.${totalKm?` Saved-GPS chain is about ${esc(totalKm.toFixed(1))} km before Google road calculation.`:''}${accuracy?` Current GPS accuracy ±${esc(Math.round(accuracy))} m.`:''}</div>${nextCard}<div class="selected-route-list">${routeRows}</div>${needsLocation.length?`<div class="notice">${esc(needsLocation.length)} doctor${needsLocation.length===1?'':'s'} stay inside this same route but need address/GPS confirmation before navigation. Use Find address; search uses Doctor + Hospital/Clinic + Type + Area/City, then save the confirmed address/GPS.</div>`:''}`;
+    let mapAction='';
+    if(!withinGoogleLimit){
+      mapAction=`<div class="notice route-limit"><strong>Google Maps limit:</strong> Android Google Maps accepts up to 9 stops in one multi-stop route. MR One kept all ${esc(selected.length)} selected doctors together and did not split or drop any doctor. To open the exact A/B/C draggable Maps screen, select 9 or fewer doctors.</div>`;
+    }else if(needsLocation.length){
+      mapAction=`<div class="notice"><strong>Confirm ${esc(needsLocation.length)} location${needsLocation.length===1?'':'s'} first.</strong> Use Find address / Google check. After every selected doctor has a saved address or GPS, this same button opens the complete A/B/C route in Google Maps.</div>`;
+    }else if(googleMultiUrl){
+      mapAction=`<a class="btn primary full" href="${googleMultiUrl}" target="_blank" rel="noopener">Open all ${esc(selected.length)} selected doctor${selected.length===1?'':'s'} in Google Maps</a><small class="muted-line">Google Maps opens the selected doctors as one editable multi-stop route in this exact order. Drag the stops inside Maps to rearrange them.</small>`;
+    }
+    out.innerHTML=`<div class="manager-summary"><div><small>SELECTED</small><strong>${esc(selected.length)}</strong></div><div><small>LOCATION READY</small><strong>${esc(routable.length)}</strong></div><div><small>NEEDS ADDRESS</small><strong>${esc(needsLocation.length)}</strong></div></div><div class="notice"><strong>Selected doctors → Google Maps multi-stop route.</strong> Your manual order becomes A → B → C → D… in Maps. Google resolves each stop from confirmed Place ID when available, otherwise saved GPS/address.${totalKm?` Saved-GPS chain is about ${esc(totalKm.toFixed(1))} km before Google road calculation.`:''}${accuracy?` Current GPS accuracy ±${esc(Math.round(accuracy))} m.`:''}</div>${mapAction}<div class="selected-route-list">${routeRows}</div>${needsLocation.length?`<div class="notice">Address missing means only “not saved yet.” Search uses Doctor + Hospital/Clinic + Type + Area/City, confirm the correct Google result, save address/GPS, then reopen the selected route.</div>`:''}`;
   }
+
   function buildSelectedDoctorRoute(){
     const selected=selectedRouteDoctors();if(!selected.length){toast('Select at least one doctor first.');return;}
-    selectedRouteCursor=0;
-    openSheet('Selected doctor route',`${selected.length} doctors • one full manual order • Navigate next`,`<div class="notice"><strong>Full route:</strong> all selected doctors stay together. Arrange the complete list yourself; MR One never splits it into Google route legs.</div><div class="location-card"><div class="location-head"><div><strong>My current location</strong><small id="selectedrouteLocationStatus" class="location-status loading">Fetching current GPS…</small></div><button type="button" id="selectedrouteFetchLocation" class="btn secondary compact">Refresh GPS</button></div><a id="selectedrouteLocationMap" class="hidden" target="_blank" rel="noopener">View my location</a><input id="selectedrouteLatitude" type="hidden"><input id="selectedrouteLongitude" type="hidden"><input id="selectedrouteAccuracy" type="hidden"><input id="selectedrouteCapturedAt" type="hidden"></div><div id="selectedRouteResults">${empty('Preparing your full selected route…')}</div>`);
+    openSheet('Selected doctor route',`${selected.length} doctors • manual order → Google Maps`,`<div class="notice"><strong>Google Maps route:</strong> selected doctors stay in your manual order. With 9 or fewer location-ready doctors, Open in Google Maps launches the editable A/B/C multi-stop screen.</div><div class="location-card"><div class="location-head"><div><strong>My current location</strong><small id="selectedrouteLocationStatus" class="location-status loading">Fetching current GPS…</small></div><button type="button" id="selectedrouteFetchLocation" class="btn secondary compact">Refresh GPS</button></div><a id="selectedrouteLocationMap" class="hidden" target="_blank" rel="noopener">View my location</a><input id="selectedrouteLatitude" type="hidden"><input id="selectedrouteLongitude" type="hidden"><input id="selectedrouteAccuracy" type="hidden"><input id="selectedrouteCapturedAt" type="hidden"></div><div id="selectedRouteResults">${empty('Preparing your full selected route…')}</div>`);
     if(selectedRouteGpsListener)document.removeEventListener('mr-location-ready',selectedRouteGpsListener);selectedRouteGpsListener=e=>{if(e.detail?.prefix!=='selectedroute')return;renderSelectedDoctorRoutePreview(e.detail.latitude,e.detail.longitude,e.detail.accuracy||0);};document.addEventListener('mr-location-ready',selectedRouteGpsListener);
     if(lastFieldLocation){$('#selectedrouteLatitude').value=lastFieldLocation.latitude;$('#selectedrouteLongitude').value=lastFieldLocation.longitude;$('#selectedrouteAccuracy').value=lastFieldLocation.accuracy||'';renderSelectedDoctorRoutePreview(lastFieldLocation.latitude,lastFieldLocation.longitude,lastFieldLocation.accuracy||0);}else renderSelectedDoctorRoutePreview(0,0,0);
     setupLocationCapture('selectedroute',true);
@@ -2476,8 +2493,6 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
         if(action==='route-move-up')moveSelectedRouteDoctor(id,-1);
         if(action==='route-move-down')moveSelectedRouteDoctor(id,1);
         if(action==='route-move-to')moveSelectedRouteDoctorTo(id);
-        if(action==='route-prev')changeSelectedRouteCursor(-1);
-        if(action==='route-next')changeSelectedRouteCursor(1);
         if(action==='quick-complete-doctor')quickCompleteDoctor();
         if(action==='area-time-plan')areaTimeDoctorPlan();
         if(action==='edit-tour-plan')editTourPlan(id);

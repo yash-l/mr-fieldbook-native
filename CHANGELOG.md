@@ -1,3 +1,6 @@
+# v1.5.5
+- Selected doctors launch the Google Maps editable A/B/C multi-stop route when within the official Android stop limit; larger selections are kept intact and never silently split.
+
 # v1.5.4
 - One full manually arranged selected-doctor route; no route-leg splitting.
 - Navigate Next opens Google Maps one doctor at a time while MR One retains the complete route.
