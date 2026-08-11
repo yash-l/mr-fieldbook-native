@@ -172,3 +172,8 @@ button:active,.btn:active,.settings-card:active,.mini-card:active,.record-card:a
 .route-pick{width:38px;height:38px;flex:0 0 auto;border:1px solid var(--line);border-radius:12px;background:var(--surface2);color:var(--muted);font-size:19px;font-weight:900;display:grid;place-items:center}.route-pick.selected{background:var(--brand);border-color:var(--brand);color:#fff}.record-card.route-selected{border-color:#6dd7c4;box-shadow:0 0 0 2px rgba(19,161,138,.10),var(--shadow-soft)}
 .selected-route-list{display:flex;flex-direction:column;gap:8px;margin:12px 0}.route-leg-btn{margin-top:8px}.route-missing{margin-top:14px}
 @media(max-width:520px){.route-selection-bar{align-items:flex-start;flex-direction:column;top:54px}.route-selection-actions{width:100%;justify-content:stretch}.route-selection-actions .btn{flex:1}.search-row .route-select-btn{padding-left:10px;padding-right:10px}}
+
+/* v1.5.3 address + GPS verified selected route */
+.route-stop-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;align-items:center}
+.route-stop em{display:block;margin-top:4px;color:var(--muted);font-size:8px;font-style:normal;line-height:1.35;word-break:break-word}
+@media(max-width:520px){.route-stop-actions{grid-column:2;justify-content:flex-start}.route-stop-actions .btn{width:auto}}

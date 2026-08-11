@@ -1,3 +1,6 @@
+# v1.5.3
+- Selected routes now support both saved GPS and saved address, with Google name + hospital + address cross-check.
+
 # v1.5.2
 - Added manual selected-doctor Google Maps route after filters/search.
 
