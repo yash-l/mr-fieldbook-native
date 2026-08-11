@@ -1,3 +1,6 @@
+# v1.5.2
+- Added manual selected-doctor Google Maps route after filters/search.
+
 # v1.5.1
 - Added true multiple doctor filter application with active count and reset.
 

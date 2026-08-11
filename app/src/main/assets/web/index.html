@@ -109,7 +109,7 @@
 
         <div class="field-tools-grid">
           <div class="field-tool-card nearby-tool"><div><small>NEARBY HOSPITALS</small><strong id="nearbyReadyCount">GPS</strong><p>Find saved and live hospitals around you</p></div><button id="nearbyHospitalBtn" class="btn primary compact">Find nearby</button></div>
-          <div class="field-tool-card route-tool"><div><small>SAVED LOCATION ROUTE</small><strong id="routeReadyCount">0</strong><p id="routeReadyText">Verify hospital GPS and timing first</p></div><button id="planRouteBtn" class="btn primary compact">Plan saved route</button></div>
+          <div class="field-tool-card route-tool"><div><small>DOCTOR ROUTE</small><strong id="routeReadyCount">0</strong><p id="routeReadyText">Filter doctors → select exactly who you want → Maps route</p></div><button id="planRouteBtn" class="btn primary compact">Select doctors</button></div>
           <div class="field-tool-card order-tool"><div><small>DISTRIBUTOR ORDERS</small><strong id="todayOrderCount">0</strong><p><span id="todayOrderValue">₹0</span> POB today</p></div><button id="newOrderBtn" class="btn primary compact">+ Order</button></div>
         </div>
 
@@ -125,8 +125,9 @@
 
       <section class="page" data-page="doctors">
         <div class="page-title-row"><div><h1>Doctors</h1><p id="doctorSubtitle">0 records</p></div><button class="fab-inline" data-action="add-doctor">＋ Add</button></div>
-        <div class="search-row"><label class="search-box"><span>⌕</span><input id="doctorSearch" type="search" placeholder="Doctor, hospital, chemist, address, area…" /></label><button id="doctorFilterBtn" class="filter-btn">Filter</button></div>
+        <div class="search-row"><label class="search-box"><span>⌕</span><input id="doctorSearch" type="search" placeholder="Doctor, hospital, chemist, address, area…" /></label><button id="doctorFilterBtn" class="filter-btn">Filter</button><button id="doctorRouteSelectBtn" class="filter-btn route-select-btn">Route</button></div>
         <div id="doctorChips" class="chip-row"></div>
+        <div id="doctorRouteBar" class="route-selection-bar hidden"></div>
         <div id="doctorList" class="card-list"></div>
       </section>
 
@@ -157,7 +158,7 @@
           <button class="settings-card action-card" id="manageDistributorsBtn"><span>DS</span><div><h3>Distributor setup</h3><p id="distributorCountText">0 distributors</p></div></button>
           <button class="settings-card action-card" id="manageSchemesBtn"><span>%</span><div><h3>Date-wise offers</h3><p id="schemeCountText">0 active schemes</p></div></button>
           <button class="settings-card action-card" data-action="nearby-hospitals"><span>◎</span><div><h3>Nearby hospital discovery</h3><p>GPS → hospital → doctor → Google verify</p></div></button>
-          <button class="settings-card action-card" data-action="plan-route"><span>⌖</span><div><h3>Saved hospital route</h3><p>Timing + verified hospital locations; no live GPS</p></div></button>
+          <button class="settings-card action-card" data-action="plan-route"><span>⌖</span><div><h3>Doctor route</h3><p>Filter → manually select doctors → build Google Maps route</p></div></button>
           <button class="settings-card action-card" data-action="new-order"><span>₹</span><div><h3>New POB order</h3><p>Chemist → distributor → products</p></div></button>
           <button class="settings-card action-card san-overlay-card" id="sanOverlayBtn"><span>CP</span><div><h3>SAN copy overlay</h3><p>Copy in SAN → floating paste box → review in MR</p></div></button>
           <button class="settings-card action-card" data-action="app-update"><span>↑</span><div><h3>App update</h3><p id="appUpdateToolText">One-tap check, download and install</p></div></button>

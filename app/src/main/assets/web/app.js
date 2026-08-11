@@ -495,6 +495,9 @@ function defaultSchemes() {
   let chemistFilter = 'all';
   let visitFilter = 'all';
   let doctorRenderLimit = 60;
+  let doctorRouteSelectMode = false;
+  let selectedRouteDoctorIds = new Set();
+  let lastRenderedDoctorIds = [];
   let chemistRenderLimit = 60;
   let deferredInstallPrompt = null;
   let pendingSanClipboardText = "";
@@ -883,10 +886,10 @@ function discoverNearbyHospitals(){
     $('#collectionProgressBar').style.width=`${Math.min(100,cov.score)}%`;
     $('#collectionProgressText').textContent=`${cov.score}% ready • ${cov.gps}/${cov.total} GPS • ${cov.timing}/${cov.total} timings • ${cov.linked}/${cov.total} chemist links`;
     $('#workflowModeBtn').textContent=mode==='collect'?'Switch to field work':'Back to data gathering';
-    const routeReady=state.doctors.filter(d=>{const access=doctorAccessForDate(d);const slot=access.fixed?access.slots[0]:todaySlot(d);return (doctorEligibilityForDate(d).eligible||access.fixed)&&access.ready&&slot&&d.latitude&&d.longitude&&!rowsForDay().some(v=>v.doctorId===d.id);}).length;
+    const routeReady=state.doctors.filter(d=>num(d.latitude)&&num(d.longitude)).length;
     $('#nearbyReadyCount').textContent=state.doctors.filter(d=>doctorHospital(d)&&d.latitude&&d.longitude).length;
     $('#routeReadyCount').textContent=routeReady;
-    $('#routeReadyText').textContent=routeReady?`${routeReady} unvisited doctors have saved timing + hospital GPS`:`Add doctor timing and verify hospital GPS once`;
+    $('#routeReadyText').textContent=routeReady?`${routeReady} doctors have GPS ready • filter and select exactly who you want`:`Add/verify doctor GPS, then filter and select your route`;
     renderMachineDashboard();
     const orders=ordersForDay().sort((a,b)=>String(b.date).localeCompare(String(a.date)));
     $('#todayOrderCount').textContent=orders.length;
@@ -908,6 +911,51 @@ function orderMiniCard(o){
   const d=distributorById(o.distributorId),items=(o.items||[]).map(x=>`${x.product}${x.qty?` ×${x.qty}`:''}`).join(', ');
   return `<button class="mini-card plain-button" data-action="view-order" data-id="${esc(o.id)}"><span class="mini-icon">₹</span><span class="mini-copy"><h3>${esc(o.chemistName||o.doctorName||'POB order')}</h3><p>${esc([d?.name||o.distributorName,items].filter(Boolean).join(' • '))}</p></span><span class="mini-side"><strong>₹${esc(orderTotal(o).toLocaleString('en-IN'))}</strong><small>${esc(prettyTime(o.date))}</small></span></button>`;
 }
+
+  function selectedRouteDoctors(){return [...selectedRouteDoctorIds].map(doctorById).filter(Boolean);}
+  function renderDoctorRouteSelectionUi(){
+    const bar=$('#doctorRouteBar'),btn=$('#doctorRouteSelectBtn');if(!bar||!btn)return;
+    const count=selectedRouteDoctorIds.size;
+    btn.textContent=doctorRouteSelectMode?(count?`Done (${count})`:'Done'):(count?`Route (${count})`:'Route');
+    btn.classList.toggle('active',doctorRouteSelectMode||count>0);
+    if(!doctorRouteSelectMode&&!count){bar.classList.add('hidden');bar.innerHTML='';return;}
+    bar.classList.remove('hidden');
+    bar.innerHTML=`<div class="route-selection-copy"><strong>${esc(count)} selected</strong><small>${doctorRouteSelectMode?'Tap + on doctor cards. Filters/search can change; selected doctors stay selected.':'Selection saved. Open Route to continue selecting.'}</small></div><div class="route-selection-actions"><button type="button" class="btn secondary compact" data-action="select-shown-route-doctors">Select shown</button><button type="button" class="btn secondary compact" data-action="clear-route-doctors" ${count?'':'disabled'}>Clear</button><button type="button" class="btn primary compact" data-action="build-selected-doctor-route" ${count?'':'disabled'}>Build route</button></div>`;
+  }
+  function startDoctorRouteSelection(){doctorRouteSelectMode=true;navigate('doctors');renderDoctorRouteSelectionUi();toast('Filter/search, then select the doctors you want in this route.');}
+  function toggleDoctorRouteMode(){doctorRouteSelectMode=!doctorRouteSelectMode;renderDoctors();}
+  function toggleSelectedRouteDoctor(id){if(!doctorById(id))return;selectedRouteDoctorIds.has(id)?selectedRouteDoctorIds.delete(id):selectedRouteDoctorIds.add(id);renderDoctors();}
+  function clearSelectedRouteDoctors(){selectedRouteDoctorIds.clear();renderDoctors();}
+  function selectShownRouteDoctors(){lastRenderedDoctorIds.forEach(id=>selectedRouteDoctorIds.add(id));doctorRouteSelectMode=true;renderDoctors();}
+  function selectedRouteDistance(order,start){if(!order.length||!start)return 0;let total=0,lat=num(start.latitude),lng=num(start.longitude);for(const d of order){total+=smartRoadKm(lat,lng,d.latitude,d.longitude);lat=num(d.latitude);lng=num(d.longitude);}return total;}
+  function optimizeSelectedDoctorRoute(doctors,start){
+    const remaining=doctors.filter(d=>num(d.latitude)&&num(d.longitude)).slice(),ordered=[];let lat=num(start.latitude),lng=num(start.longitude);
+    while(remaining.length){let bestIndex=0,best=Infinity;remaining.forEach((d,i)=>{const km=smartRoadKm(lat,lng,d.latitude,d.longitude);if(km<best){best=km;bestIndex=i;}});const d=remaining.splice(bestIndex,1)[0];ordered.push(d);lat=num(d.latitude);lng=num(d.longitude);}
+    // Small 2-opt pass reduces obvious backtracking without calling a paid routing API.
+    let bestDistance=selectedRouteDistance(ordered,start),improved=true,passes=0;
+    while(improved&&passes++<4){improved=false;for(let i=0;i<ordered.length-1;i++){for(let k=i+1;k<ordered.length;k++){const candidate=ordered.slice(0,i).concat(ordered.slice(i,k+1).reverse(),ordered.slice(k+1)),distance=selectedRouteDistance(candidate,start);if(distance+0.02<bestDistance){ordered.splice(0,ordered.length,...candidate);bestDistance=distance;improved=true;}}}}
+    return {ordered,totalKm:bestDistance};
+  }
+  function selectedDoctorRouteLegs(start,ordered){
+    const legs=[];let origin={latitude:num(start.latitude),longitude:num(start.longitude)},index=0;
+    // Google Maps URLs allow up to nine waypoints on supported clients; 10 selected stops = 9 waypoints + destination.
+    while(index<ordered.length){const stops=ordered.slice(index,index+10),dest=stops[stops.length-1],waypoints=stops.slice(0,-1).map(d=>`${num(d.latitude)},${num(d.longitude)}`).join('|');const url=`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(`${num(origin.latitude)},${num(origin.longitude)}`)}&destination=${encodeURIComponent(`${num(dest.latitude)},${num(dest.longitude)}`)}${waypoints?`&waypoints=${encodeURIComponent(waypoints)}`:''}&travelmode=driving`;legs.push({url,stops,from:index+1,to:index+stops.length});origin={latitude:num(dest.latitude),longitude:num(dest.longitude)};index+=stops.length;}
+    return legs;
+  }
+  function renderSelectedDoctorRoutePreview(latitude,longitude,accuracy=0){
+    const out=$('#selectedRouteResults');if(!out)return;const selected=selectedRouteDoctors(),missing=selected.filter(d=>!num(d.latitude)||!num(d.longitude)),ready=selected.filter(d=>num(d.latitude)&&num(d.longitude));
+    if(!ready.length){out.innerHTML=`${empty('Selected doctors do not have saved GPS yet.')}${missing.length?`<div class="detail-section"><h4>GPS required</h4>${missing.map(d=>`<div class="ledger-row"><div class="copy"><strong>${esc(doctorDisplayName(d))}</strong><small>${esc([doctorHospital(d),inferDoctorArea(d),'Open doctor → Find GPS FREE / Verify'].filter(Boolean).join(' • '))}</small></div><div class="value"><button data-action="view-record" data-type="doctor" data-id="${esc(d.id)}">Open</button></div></div>`).join('')}</div>`:''}`;return;}
+    const start={latitude:num(latitude),longitude:num(longitude)},plan=optimizeSelectedDoctorRoute(ready,start),legs=selectedDoctorRouteLegs(start,plan.ordered),routeRows=plan.ordered.map((d,i)=>`<div class="route-stop"><span>${i+1}</span><div><strong>${esc(doctorDisplayName(d))}</strong><small>${esc([doctorType(d),doctorHospital(d),inferDoctorArea(d)].filter(Boolean).join(' • '))}</small></div><a class="btn secondary compact" href="${entityMapUrl(d)}" target="_blank" rel="noopener">Pin</a></div>`).join('');
+    const mapButtons=legs.length===1?`<a class="btn primary full" href="${legs[0].url}" target="_blank" rel="noopener">Open selected route in Google Maps</a>`:`<div class="detail-section"><h4>Google Maps route legs</h4><p class="muted-line">${esc(ready.length)} selected doctors are split only because one Maps URL has a waypoint limit.</p>${legs.map((leg,i)=>`<a class="btn primary full route-leg-btn" href="${leg.url}" target="_blank" rel="noopener">Open leg ${i+1} • doctors ${leg.from}–${leg.to}</a>`).join('')}</div>`;
+    out.innerHTML=`<div class="manager-summary"><div><small>SELECTED</small><strong>${esc(selected.length)}</strong></div><div><small>ROUTABLE</small><strong>${esc(ready.length)}</strong></div><div><small>APPROX CHAIN</small><strong>${esc(plan.totalKm.toFixed(1))} km</strong></div></div><div class="notice">Starts from your current GPS${accuracy?` (±${esc(Math.round(accuracy))} m)`:''}. The app orders only the doctors you selected to reduce backtracking; Google Maps calculates the actual road route when opened.</div><div class="selected-route-list">${routeRows}</div>${mapButtons}${missing.length?`<div class="detail-section route-missing"><h4>${esc(missing.length)} selected doctor${missing.length===1?'':'s'} not added to Maps</h4>${missing.map(d=>`<div class="ledger-row"><div class="copy"><strong>${esc(doctorDisplayName(d))}</strong><small>GPS missing • ${esc(inferDoctorArea(d))}</small></div><div class="value"><button data-action="view-record" data-type="doctor" data-id="${esc(d.id)}">Fix GPS</button></div></div>`).join('')}</div>`:''}`;
+  }
+  function buildSelectedDoctorRoute(){
+    const selected=selectedRouteDoctors();if(!selected.length){toast('Select at least one doctor first.');return;}
+    openSheet('Selected doctor route',`${selected.length} doctor${selected.length===1?'':'s'} selected • current GPS → optimized order → Google Maps`,`<div class="location-card"><div class="location-head"><div><strong>Route start</strong><small id="selectedrouteLocationStatus" class="location-status loading">Fetching current GPS…</small></div><button type="button" id="selectedrouteFetchLocation" class="btn secondary compact">Refresh GPS</button></div><a id="selectedrouteLocationMap" class="hidden" target="_blank" rel="noopener">View my location</a><input id="selectedrouteLatitude" type="hidden"><input id="selectedrouteLongitude" type="hidden"><input id="selectedrouteAccuracy" type="hidden"><input id="selectedrouteCapturedAt" type="hidden"></div><div id="selectedRouteResults">${empty('Preparing route from your current location…')}</div>`);
+    const onGps=e=>{if(e.detail?.prefix!=='selectedroute')return;renderSelectedDoctorRoutePreview(e.detail.latitude,e.detail.longitude,e.detail.accuracy||0);};document.addEventListener('mr-location-ready',onGps);
+    if(lastFieldLocation){$('#selectedrouteLatitude').value=lastFieldLocation.latitude;$('#selectedrouteLongitude').value=lastFieldLocation.longitude;$('#selectedrouteAccuracy').value=lastFieldLocation.accuracy||'';renderSelectedDoctorRoutePreview(lastFieldLocation.latitude,lastFieldLocation.longitude,lastFieldLocation.accuracy||0);}
+    setupLocationCapture('selectedroute',true);
+  }
 
   function renderDoctors() {
     const searchEl=$('#doctorSearch');if(!searchEl)return;
@@ -951,6 +999,8 @@ function orderMiniCard(o){
     if($('#doctorFilterBtn'))$('#doctorFilterBtn').textContent=filterCount?`Filter (${filterCount})`:'Filter';
     $('#doctorSubtitle').textContent=doctorFilters.todayAvailable?`${list.length} doctors match • available today + ${Math.max(0,filterCount-1)} other filter${filterCount===2?'':'s'}`:`${list.length} of ${state.doctors.length} records${filterCount?` • ${filterCount} filter${filterCount===1?'':'s'} active`:''} • ${list.filter(doctorHasTiming).length} timing ready`;
     const visible=list.slice(0,doctorRenderLimit);
+    lastRenderedDoctorIds=visible.map(d=>d.id);
+    renderDoctorRouteSelectionUi();
     if(!visible.length){$('#doctorList').innerHTML=empty('No doctors match this filter combination. Remove one filter or reset all.');return;}
     let html='';
     if(!q&&!doctorFiltersActive()){
@@ -999,7 +1049,8 @@ function orderMiniCard(o){
     const verification=isDoctor?doctorLocationVerification(r):null;
     const verifyAction=isDoctor?`<button data-action="verify-doctor-location" data-id="${r.id}">${verification.verified?'Verified':'Verify'}</button>`:'';
     const actions=isDoctor?`${verifyAction}${locationAction}<button class="primary-action" data-action="log-record" data-type="doctor" data-id="${r.id}">Call</button><button data-action="view-record" data-type="doctor" data-id="${r.id}">View</button>`:`${locationAction}<button class="primary-action" data-action="chemist-visit" data-id="${r.id}">Visit</button><button data-action="quick-rcpa" data-id="${r.id}">RCPA</button><button data-action="view-record" data-type="chemist" data-id="${r.id}">View</button>`;
-    return `<article class="record-card"><div class="record-top"><div class="avatar">${esc(initials(r.name))}</div><div class="record-title"><div class="title-line"><h3>${esc(isDoctor?doctorDisplayName(r):r.name)}</h3>${typeTag}</div><p>${esc(subtitle||'Details not added')}</p></div></div>${r.address?`<p class="record-note">${esc(r.address).slice(0,180)}</p>`:''}<div class="tag-row">${todayAvailabilityTag}${timingTag}${isDoctor?`<span class="tag ${verification?.verified?'good':verification?.hasGps?'due':''}">${esc(verification?.label||'')}</span>`:''}${productTags}${tags.slice(0,1).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div><div class="record-actions ${isDoctor?'doctor-actions-four':'chemist-actions-four'}">${actions}</div></article>`;
+    const routeSelected=isDoctor&&selectedRouteDoctorIds.has(r.id),routePick=isDoctor&&doctorRouteSelectMode?`<button type="button" class="route-pick ${routeSelected?'selected':''}" data-action="toggle-route-doctor" data-id="${esc(r.id)}" aria-pressed="${routeSelected?'true':'false'}" aria-label="${routeSelected?'Remove from':'Add to'} route">${routeSelected?'✓':'＋'}</button>`:'';
+    return `<article class="record-card ${routeSelected?'route-selected':''}"><div class="record-top"><div class="avatar">${esc(initials(r.name))}</div><div class="record-title"><div class="title-line"><h3>${esc(isDoctor?doctorDisplayName(r):r.name)}</h3>${typeTag}</div><p>${esc(subtitle||'Details not added')}</p></div>${routePick}</div>${r.address?`<p class="record-note">${esc(r.address).slice(0,180)}</p>`:''}<div class="tag-row">${todayAvailabilityTag}${timingTag}${isDoctor?`<span class="tag ${verification?.verified?'good':verification?.hasGps?'due':''}">${esc(verification?.label||'')}</span>`:''}${productTags}${tags.slice(0,1).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div><div class="record-actions ${isDoctor?'doctor-actions-four':'chemist-actions-four'}">${actions}</div></article>`;
   }
 
   function renderVisits() {
@@ -2359,6 +2410,10 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
         if(action==='toggle-doctor-filter'){toggleDoctorFilter(a.dataset.value||'');doctorRenderLimit=60;openDoctorFilterPanel();renderDoctors();}
         if(action==='reset-doctor-filters'){resetDoctorFilters();doctorRenderLimit=60;openDoctorFilterPanel();renderDoctors();}
         if(action==='apply-doctor-filters'){doctorRenderLimit=60;closeSheet();renderDoctors();}
+        if(action==='toggle-route-doctor')toggleSelectedRouteDoctor(id);
+        if(action==='select-shown-route-doctors')selectShownRouteDoctors();
+        if(action==='clear-route-doctors')clearSelectedRouteDoctors();
+        if(action==='build-selected-doctor-route')buildSelectedDoctorRoute();
         if(action==='quick-complete-doctor')quickCompleteDoctor();
         if(action==='area-time-plan')areaTimeDoctorPlan();
         if(action==='edit-tour-plan')editTourPlan(id);
@@ -2367,7 +2422,7 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
         if(action==='edit-sales')editSales();
         if(action==='add-doctor')editRecord('doctor');if(action==='add-chemist')editRecord('chemist');
         if(action==='log-record'){if(type==='doctor')quickMeeting(id,'');else quickChemistVisit(id);}
-        if(action==='edit-record')editRecord(type,id);if(action==='view-record')viewRecord(type,id);if(action==='view-visit')viewVisit(id);if(action==='add-distributor')editDistributor();if(action==='edit-distributor')editDistributor(id);if(action==='manage-distributors')manageDistributors();if(action==='add-scheme')editScheme();if(action==='edit-scheme')editScheme(id);if(action==='manage-schemes')manageSchemes();if(action==='new-order')quickOrder(a.dataset.distributorId||'');if(action==='view-order')viewOrder(id);if(action==='plan-route')planTodayRoute();if(action==='nearby-hospitals')discoverNearbyHospitals();if(action==='voice-capture')voiceDataCapture();return;}
+        if(action==='edit-record')editRecord(type,id);if(action==='view-record')viewRecord(type,id);if(action==='view-visit')viewVisit(id);if(action==='add-distributor')editDistributor();if(action==='edit-distributor')editDistributor(id);if(action==='manage-distributors')manageDistributors();if(action==='add-scheme')editScheme();if(action==='edit-scheme')editScheme(id);if(action==='manage-schemes')manageSchemes();if(action==='new-order')quickOrder(a.dataset.distributorId||'');if(action==='view-order')viewOrder(id);if(action==='plan-route')startDoctorRouteSelection();if(action==='nearby-hospitals')discoverNearbyHospitals();if(action==='voice-capture')voiceDataCapture();return;}
       const dc=e.target.closest('[data-doctor-chip]');if(dc){toggleDoctorFilter(dc.dataset.doctorChip);doctorRenderLimit=60;renderDoctors();haptic('selection');return;}
       const cc=e.target.closest('[data-chemist-chip]');if(cc){chemistFilter=cc.dataset.chemistChip;chemistRenderLimit=60;renderChemists();return;}
       const vf=e.target.closest('[data-visit-filter]');if(vf){visitFilter=vf.dataset.visitFilter;renderVisits();return;}
@@ -2377,10 +2432,11 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
     const debouncedDoctorSearch=debounce(()=>{doctorRenderLimit=60;renderDoctors();},80),debouncedChemistSearch=debounce(()=>{chemistRenderLimit=60;renderChemists();},80);
     $('#doctorSearch').addEventListener('input',debouncedDoctorSearch);$('#chemistSearch').addEventListener('input',debouncedChemistSearch);
     $('#doctorFilterBtn').addEventListener('click',openDoctorFilterPanel);
+    $('#doctorRouteSelectBtn').addEventListener('click',toggleDoctorRouteMode);
     $('#stockFilterBtn').addEventListener('click',()=>{chemistFilter=chemistFilter==='feedback'?'all':'feedback';renderChemists();});
     $('#workflowModeBtn').addEventListener('click',()=>{state.settings.workflowMode=state.settings.workflowMode==='collect'?'field':'collect';saveState();toast(state.settings.workflowMode==='collect'?'Data gathering mode active.':'Field work mode active.');});
     $('#machineOpenBtn').addEventListener('click',openIntelligenceCenter);$('#companyReportPackBtn').addEventListener('click',exportCompanyReportPack);$('#sanOverlayBtn').addEventListener('click',openSanOverlayManager);
-    $('#nearbyHospitalBtn').addEventListener('click',discoverNearbyHospitals);$('#planRouteBtn').addEventListener('click',planTodayRoute);$('#newOrderBtn').addEventListener('click',()=>quickOrder());$('#manageDistributorsBtn').addEventListener('click',manageDistributors);$('#manageSchemesBtn').addEventListener('click',manageSchemes);$('#exportXlsxBtn').addEventListener('click',exportXLSX);
+    $('#nearbyHospitalBtn').addEventListener('click',discoverNearbyHospitals);$('#planRouteBtn').addEventListener('click',startDoctorRouteSelection);$('#newOrderBtn').addEventListener('click',()=>quickOrder());$('#manageDistributorsBtn').addEventListener('click',manageDistributors);$('#manageSchemesBtn').addEventListener('click',manageSchemes);$('#exportXlsxBtn').addEventListener('click',exportXLSX);
     $('#copyReportBtn').addEventListener('click',async()=>{try{const text=getReportText();if(window.AndroidBridge?.copyText)window.AndroidBridge.copyText(text);else await navigator.clipboard.writeText(text);toast('Daily report copied.');}catch(_){toast('Copy failed. Use Share.');}});
     $('#shareReportBtn').addEventListener('click',async()=>{const text=getReportText();try{if(window.AndroidBridge?.shareText)window.AndroidBridge.shareText('MR Daily Report',text);else if(navigator.share)await navigator.share({title:'MR Daily Report',text});else window.open(`https://wa.me/?text=${encodeURIComponent(text)}`,'_blank');}catch(e){if(e.name!=='AbortError')toast('Share cancelled.');}});
     $('#importFile').addEventListener('change',e=>{if(e.target.files.length)importFiles([...e.target.files]);e.target.value='';});$('#loadBundledBtn').addEventListener('click',()=>{if(window.AndroidBridge){const status=$('#importStatus');status.className='notice';status.classList.remove('hidden');status.textContent='The supplied doctor, chemist and product data is already included in this Android app.';toast('Starter data is already loaded.');}else loadBundledFiles(false);});
