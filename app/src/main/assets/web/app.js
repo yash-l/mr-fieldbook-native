@@ -471,7 +471,27 @@ function defaultSchemes() {
 
   let state = loadState();
   let activePage = 'dashboard';
-  let doctorFilter = 'all';
+  let doctorFilters = {todayAvailable:false,timing:'',addressMissing:false,types:new Set(),areas:new Set()};
+  function resetDoctorFilters(){doctorFilters={todayAvailable:false,timing:'',addressMissing:false,types:new Set(),areas:new Set()};}
+  function doctorFiltersActive(){return doctorFilters.todayAvailable||Boolean(doctorFilters.timing)||doctorFilters.addressMissing||doctorFilters.types.size>0||doctorFilters.areas.size>0;}
+  function doctorFilterCount(){return (doctorFilters.todayAvailable?1:0)+(doctorFilters.timing?1:0)+(doctorFilters.addressMissing?1:0)+doctorFilters.types.size+doctorFilters.areas.size;}
+  function doctorFilterHas(key){
+    if(key==='all')return !doctorFiltersActive();
+    if(key==='today_available')return doctorFilters.todayAvailable;
+    if(key==='timing'||key==='no_timing')return doctorFilters.timing===key;
+    if(key==='address_missing')return doctorFilters.addressMissing;
+    if(key.startsWith('type:'))return doctorFilters.types.has(key.slice(5));
+    if(key.startsWith('area:'))return doctorFilters.areas.has(key.slice(5));
+    return false;
+  }
+  function toggleDoctorFilter(key){
+    if(!key||key==='all'){resetDoctorFilters();return;}
+    if(key==='today_available'){doctorFilters.todayAvailable=!doctorFilters.todayAvailable;return;}
+    if(key==='timing'||key==='no_timing'){doctorFilters.timing=doctorFilters.timing===key?'':key;return;}
+    if(key==='address_missing'){doctorFilters.addressMissing=!doctorFilters.addressMissing;return;}
+    if(key.startsWith('type:')){const v=key.slice(5);doctorFilters.types.has(v)?doctorFilters.types.delete(v):doctorFilters.types.add(v);return;}
+    if(key.startsWith('area:')){const v=key.slice(5);doctorFilters.areas.has(v)?doctorFilters.areas.delete(v):doctorFilters.areas.add(v);}
+  }
   let chemistFilter = 'all';
   let visitFilter = 'all';
   let doctorRenderLimit = 60;
@@ -906,33 +926,34 @@ function orderMiniCard(o){
       ['type:GP','GP'],
       ...topAreas.map(a=>[`area:${a}`,a])
     ];
-    $('#doctorChips').innerHTML=chips.map(([key,label])=>`<button class="chip ${doctorFilter===key?'active':''}" data-doctor-chip="${esc(key)}">${esc(label)}</button>`).join('');
+    $('#doctorChips').innerHTML=chips.map(([key,label])=>`<button class="chip ${doctorFilterHas(key)?'active':''}" data-doctor-chip="${esc(key)}">${esc(label)}</button>`).join('');
     let list=state.doctors.filter(d=>{
       const ch=linkedChemist(d),area=inferDoctorArea(d),type=doctorType(d);
       const hay=[d.name,doctorHospital(d),d.address,area,d.hq,ch?.name,d.notes,type,...suggestedProductsForDoctor(d)].join(' ').toLowerCase();
-      const matchQ=!q||hay.includes(q);
-      let matchF=true;
-      if(doctorFilter==='today_available')matchF=doctorTodayAvailability(d).available;
-      else if(doctorFilter==='timing')matchF=doctorHasTiming(d);
-      else if(doctorFilter==='no_timing')matchF=!doctorHasTiming(d);
-      else if(doctorFilter==='address_missing')matchF=!clean(d.address||d.hospitalAddress);
-      else if(doctorFilter.startsWith('type:'))matchF=type===doctorFilter.slice(5);
-      else if(doctorFilter.startsWith('area:'))matchF=area===doctorFilter.slice(5);
-      return matchQ&&matchF;
+      if(q&&!hay.includes(q))return false;
+      if(doctorFilters.todayAvailable&&!doctorTodayAvailability(d).available)return false;
+      if(doctorFilters.timing==='timing'&&!doctorHasTiming(d))return false;
+      if(doctorFilters.timing==='no_timing'&&doctorHasTiming(d))return false;
+      if(doctorFilters.addressMissing&&clean(d.address||d.hospitalAddress))return false;
+      if(doctorFilters.types.size&&!doctorFilters.types.has(type))return false;
+      if(doctorFilters.areas.size&&!doctorFilters.areas.has(area))return false;
+      return true;
     }).sort((a,b)=>{
-      if(!q&&doctorFilter==='all'){const aa=inferDoctorArea(a),bb=inferDoctorArea(b);return aa.localeCompare(bb)||a.name.localeCompare(b.name);}
-      if(doctorFilter==='today_available'){
-        const rank=x=>{const s=doctorTodayAvailability(x);return s.state==='available'?0:s.state==='appointment'?1:s.state==='upcoming'?2:s.state==='card_task'?3:4;},ta=doctorTodayAvailability(a),tb=doctorTodayAvailability(b),sa=ta.slot?.start??9999,sb=tb.slot?.start??9999;
+      if(!q&&!doctorFiltersActive()){const aa=inferDoctorArea(a),bb=inferDoctorArea(b);return aa.localeCompare(bb)||a.name.localeCompare(b.name);}
+      if(doctorFilters.todayAvailable){
+        const rank=x=>{const st=doctorTodayAvailability(x);return st.state==='available'?0:st.state==='appointment'?1:st.state==='upcoming'?2:st.state==='card_task'?3:4;},ta=doctorTodayAvailability(a),tb=doctorTodayAvailability(b),sa=ta.slot?.start??9999,sb=tb.slot?.start??9999;
         return rank(a)-rank(b)||sa-sb||inferDoctorArea(a).localeCompare(inferDoctorArea(b))||a.name.localeCompare(b.name);
       }
       const rank=x=>doctorMeetingStatus(x).state==='available'?0:doctorMeetingStatus(x).state==='upcoming'?1:2;
       return rank(a)-rank(b)||a.name.localeCompare(b.name);
     });
-    $('#doctorSubtitle').textContent=doctorFilter==='today_available'?`${list.length} doctors available today • clinic access + remaining window checked`:`${list.length} of ${state.doctors.length} records • ${list.filter(doctorHasTiming).length} timing ready`;
+    const filterCount=doctorFilterCount();
+    if($('#doctorFilterBtn'))$('#doctorFilterBtn').textContent=filterCount?`Filter (${filterCount})`:'Filter';
+    $('#doctorSubtitle').textContent=doctorFilters.todayAvailable?`${list.length} doctors match • available today + ${Math.max(0,filterCount-1)} other filter${filterCount===2?'':'s'}`:`${list.length} of ${state.doctors.length} records${filterCount?` • ${filterCount} filter${filterCount===1?'':'s'} active`:''} • ${list.filter(doctorHasTiming).length} timing ready`;
     const visible=list.slice(0,doctorRenderLimit);
-    if(!visible.length){$('#doctorList').innerHTML=empty('No matching doctors. Change filter or search.');return;}
+    if(!visible.length){$('#doctorList').innerHTML=empty('No doctors match this filter combination. Remove one filter or reset all.');return;}
     let html='';
-    if(!q&&doctorFilter==='all'){
+    if(!q&&!doctorFiltersActive()){
       const groups=new Map();
       visible.forEach(d=>{const area=inferDoctorArea(d)||'Other';if(!groups.has(area))groups.set(area,[]);groups.get(area).push(d);});
       html=[...groups.entries()].map(([area,rows])=>`<section class="area-group"><div class="area-group-head"><div><span>${esc(area)}</span><small>${esc(areaCounts.get(area)||rows.length)} doctors</small></div></div>${rows.map(d=>recordCard(d,'doctor')).join('')}</section>`).join('');
@@ -969,9 +990,9 @@ function orderMiniCard(o){
     const tags=isDoctor?
       [doctorClinicSystemLabel(r),doctorVisitPolicy(r).label,r.needsCompletion&&'Needs completion',r.latitude&&'Clinic GPS',r.lastVisit&&`Last ${prettyDate(r.lastVisit)}`,r.nextFollowUp&&`Due ${prettyDate(r.nextFollowUp)}`].filter(Boolean):
       [fb.prescribed&&`${fb.prescribed} prescribed`,fb.notPrescribed&&`${fb.notPrescribed} not prescribed`,r.latitude&&'Shop GPS'].filter(Boolean);
-    const todayAvailability=isDoctor&&doctorFilter==='today_available'?doctorTodayAvailability(r):null;
+    const todayAvailability=isDoctor&&doctorFilters.todayAvailable?doctorTodayAvailability(r):null;
     const timingTag=isDoctor?`<span class="tag timing ${timing.state==='available'?'good':timing.state==='unset'?'missing':''}">${esc(doctorClinicSystem(r)==='appointment'?'Appointment access':doctorClinicSystem(r)==='card_later'?(cardDroppedForDate(r.id)?'Card given • meeting ready':`Card ${timeLabel(doctorCardDropTime(r))}`):(timing.state==='unset'?'Timing missing':timing.label))}</span>`:'';
-    const todayAvailabilityTag=isDoctor&&doctorFilter==='today_available'?`<span class="tag ${todayAvailability?.state==='available'?'good':''}">${esc(todayAvailability?.label||'Available today')}</span>`:'';
+    const todayAvailabilityTag=isDoctor&&doctorFilters.todayAvailable?`<span class="tag ${todayAvailability?.state==='available'?'good':''}">${esc(todayAvailability?.label||'Available today')}</span>`:'';
     const typeTag=isDoctor?`<span class="tag specialty">${esc(doctorKind)}</span>`:'';
     const productTags=isDoctor?products.slice(0,3).map(t=>`<span class="tag product-fit">${esc(t)}</span>`).join(''):'';
     const locationAction=map?`<a href="${map}" target="_blank" rel="noopener">Map</a>`:`<button data-action="edit-record" data-type="${type}" data-id="${r.id}">Location</button>`;
@@ -2156,7 +2177,8 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
   function openDoctorFilterPanel(){
     const counts=new Map();state.doctors.forEach(d=>{const a=inferDoctorArea(d)||'Other';counts.set(a,(counts.get(a)||0)+1);});
     const areas=[...counts.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,18);
-    openSheet('Doctor filters','Filter by today availability, timing, doctor type or actual locality.',`<div class="filter-section"><small>AVAILABILITY</small><div class="chip-row wrap"><button class="chip" data-action="set-doctor-filter" data-value="all">All</button><button class="chip" data-action="set-doctor-filter" data-value="today_available">Today’s Available</button></div></div><div class="filter-section"><small>TIMING</small><div class="chip-row wrap"><button class="chip" data-action="set-doctor-filter" data-value="timing">Timing added</button><button class="chip" data-action="set-doctor-filter" data-value="no_timing">Without timing</button></div></div><div class="filter-section"><small>ADDRESS</small><div class="chip-row wrap"><button class="chip" data-action="set-doctor-filter" data-value="address_missing">Address missing</button></div></div><div class="filter-section"><small>DOCTOR TYPE</small><div class="chip-row wrap"><button class="chip" data-action="set-doctor-filter" data-value="type:PEDIA">Pedia</button><button class="chip" data-action="set-doctor-filter" data-value="type:GYNAEC">Gynaec</button><button class="chip" data-action="set-doctor-filter" data-value="type:GP">GP</button><button class="chip" data-action="set-doctor-filter" data-value="type:MATRON">Matron</button></div></div><div class="filter-section"><small>AREA</small><div class="area-filter-grid">${areas.map(([a,n])=>`<button data-action="set-doctor-filter" data-value="area:${esc(a)}"><strong>${esc(a)}</strong><small>${esc(n)} doctors</small></button>`).join('')}</div></div>`);
+    const chip=(value,label)=>`<button class="chip ${doctorFilterHas(value)?'active':''}" data-action="toggle-doctor-filter" data-value="${esc(value)}">${esc(label)}</button>`;
+    openSheet('Doctor filters','Select multiple filters. Different groups combine together; multiple doctor types or areas match either selected option.',`<div class="filter-section"><small>AVAILABILITY</small><div class="chip-row wrap">${chip('today_available','Today’s Available')}</div></div><div class="filter-section"><small>TIMING</small><div class="chip-row wrap">${chip('timing','Timing added')}${chip('no_timing','Without timing')}</div></div><div class="filter-section"><small>ADDRESS</small><div class="chip-row wrap">${chip('address_missing','Address missing')}</div></div><div class="filter-section"><small>DOCTOR TYPE</small><div class="chip-row wrap">${chip('type:PEDIA','Pedia')}${chip('type:GYNAEC','Gynaec')}${chip('type:GP','GP')}${chip('type:MATRON','Matron')}</div></div><div class="filter-section"><small>AREA</small><div class="area-filter-grid">${areas.map(([a,n])=>`<button class="${doctorFilterHas(`area:${a}`)?'active':''}" data-action="toggle-doctor-filter" data-value="area:${esc(a)}"><strong>${esc(a)}</strong><small>${esc(n)} doctors</small></button>`).join('')}</div></div><div class="sticky-save filter-actions"><button class="btn secondary" data-action="reset-doctor-filters" type="button">Reset all</button><button class="btn primary" data-action="apply-doctor-filters" type="button">Apply ${doctorFilterCount()?`(${doctorFilterCount()})`:''}</button></div>`);
   }
 
   function globalSearch() {
@@ -2334,7 +2356,9 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
         if(action==='dismiss-proximity'){proximityDismissedUntil=Date.now()+15*60*1000;hideProximityCall();}
         if(action==='show-more-doctors'){doctorRenderLimit+=60;renderDoctors();}
         if(action==='show-more-chemists'){chemistRenderLimit+=60;renderChemists();}
-        if(action==='set-doctor-filter'){doctorFilter=a.dataset.value||'all';doctorRenderLimit=60;closeSheet();renderDoctors();}
+        if(action==='toggle-doctor-filter'){toggleDoctorFilter(a.dataset.value||'');doctorRenderLimit=60;openDoctorFilterPanel();renderDoctors();}
+        if(action==='reset-doctor-filters'){resetDoctorFilters();doctorRenderLimit=60;openDoctorFilterPanel();renderDoctors();}
+        if(action==='apply-doctor-filters'){doctorRenderLimit=60;closeSheet();renderDoctors();}
         if(action==='quick-complete-doctor')quickCompleteDoctor();
         if(action==='area-time-plan')areaTimeDoctorPlan();
         if(action==='edit-tour-plan')editTourPlan(id);
@@ -2344,7 +2368,7 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
         if(action==='add-doctor')editRecord('doctor');if(action==='add-chemist')editRecord('chemist');
         if(action==='log-record'){if(type==='doctor')quickMeeting(id,'');else quickChemistVisit(id);}
         if(action==='edit-record')editRecord(type,id);if(action==='view-record')viewRecord(type,id);if(action==='view-visit')viewVisit(id);if(action==='add-distributor')editDistributor();if(action==='edit-distributor')editDistributor(id);if(action==='manage-distributors')manageDistributors();if(action==='add-scheme')editScheme();if(action==='edit-scheme')editScheme(id);if(action==='manage-schemes')manageSchemes();if(action==='new-order')quickOrder(a.dataset.distributorId||'');if(action==='view-order')viewOrder(id);if(action==='plan-route')planTodayRoute();if(action==='nearby-hospitals')discoverNearbyHospitals();if(action==='voice-capture')voiceDataCapture();return;}
-      const dc=e.target.closest('[data-doctor-chip]');if(dc){doctorFilter=dc.dataset.doctorChip;doctorRenderLimit=60;renderDoctors();return;}
+      const dc=e.target.closest('[data-doctor-chip]');if(dc){toggleDoctorFilter(dc.dataset.doctorChip);doctorRenderLimit=60;renderDoctors();haptic('selection');return;}
       const cc=e.target.closest('[data-chemist-chip]');if(cc){chemistFilter=cc.dataset.chemistChip;chemistRenderLimit=60;renderChemists();return;}
       const vf=e.target.closest('[data-visit-filter]');if(vf){visitFilter=vf.dataset.visitFilter;renderVisits();return;}
       if(e.target.closest('[data-filter-followups="due"]')){visitFilter='due';navigate('visits');}
