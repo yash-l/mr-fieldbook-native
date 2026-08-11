@@ -1,3 +1,8 @@
+# v1.5.4
+- One full manually arranged selected-doctor route; no route-leg splitting.
+- Navigate Next opens Google Maps one doctor at a time while MR One retains the complete route.
+- Missing-location doctors stay in route as address-find tasks.
+
 # v1.5.3
 - Selected routes now support both saved GPS and saved address, with Google name + hospital + address cross-check.
 

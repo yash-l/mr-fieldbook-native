@@ -931,6 +931,22 @@ function orderMiniCard(o){
 
   function selectedRouteDoctors(){return [...selectedRouteDoctorIds].map(doctorById).filter(Boolean);}
   let selectedRouteGpsListener=null;
+  let selectedRouteCursor=0;
+  function setSelectedRouteDoctorOrder(doctors){
+    selectedRouteDoctorIds=new Set(doctors.map(d=>d.id));
+    if(selectedRouteCursor>=doctors.length)selectedRouteCursor=Math.max(0,doctors.length-1);
+  }
+  function moveSelectedRouteDoctor(id,delta){
+    const list=selectedRouteDoctors(),from=list.findIndex(d=>d.id===id);if(from<0)return;
+    const to=Math.max(0,Math.min(list.length-1,from+delta));if(to===from)return;
+    const [item]=list.splice(from,1);list.splice(to,0,item);setSelectedRouteDoctorOrder(list);rerenderSelectedRouteFromSheet();
+  }
+  function moveSelectedRouteDoctorTo(id){
+    const list=selectedRouteDoctors(),from=list.findIndex(d=>d.id===id);if(from<0)return;
+    const raw=prompt(`Move ${doctorDisplayName(list[from])} to position 1–${list.length}`,String(from+1));if(raw===null)return;
+    const pos=Math.max(1,Math.min(list.length,Math.round(Number(raw)||0)));if(!pos)return;
+    const [item]=list.splice(from,1);list.splice(pos-1,0,item);setSelectedRouteDoctorOrder(list);rerenderSelectedRouteFromSheet();
+  }
   function renderDoctorRouteSelectionUi(){
     const bar=$('#doctorRouteBar'),btn=$('#doctorRouteSelectBtn');if(!bar||!btn)return;
     const count=selectedRouteDoctorIds.size;
@@ -940,18 +956,18 @@ function orderMiniCard(o){
     bar.classList.remove('hidden');
     bar.innerHTML=`<div class="route-selection-copy"><strong>${esc(count)} selected</strong><small>${doctorRouteSelectMode?'Tap + on doctor cards. Filters/search can change; selected doctors stay selected.':'Selection saved. Open Route to continue selecting.'}</small></div><div class="route-selection-actions"><button type="button" class="btn secondary compact" data-action="select-shown-route-doctors">Select shown</button><button type="button" class="btn secondary compact" data-action="clear-route-doctors" ${count?'':'disabled'}>Clear</button><button type="button" class="btn primary compact" data-action="build-selected-doctor-route" ${count?'':'disabled'}>Build route</button></div>`;
   }
-  function startDoctorRouteSelection(){doctorRouteSelectMode=true;navigate('doctors');renderDoctorRouteSelectionUi();toast('Filter/search, then select the doctors you want in this route.');}
+  function startDoctorRouteSelection(){doctorRouteSelectMode=true;navigate('doctors');renderDoctorRouteSelectionUi();toast('Filter/search, then select every doctor you want. One full route list will keep all selections.');}
   function toggleDoctorRouteMode(){doctorRouteSelectMode=!doctorRouteSelectMode;renderDoctors();}
-  function toggleSelectedRouteDoctor(id){if(!doctorById(id))return;selectedRouteDoctorIds.has(id)?selectedRouteDoctorIds.delete(id):selectedRouteDoctorIds.add(id);renderDoctors();}
-  function clearSelectedRouteDoctors(){selectedRouteDoctorIds.clear();renderDoctors();}
+  function toggleSelectedRouteDoctor(id){if(!doctorById(id))return;selectedRouteDoctorIds.has(id)?selectedRouteDoctorIds.delete(id):selectedRouteDoctorIds.add(id);selectedRouteCursor=Math.min(selectedRouteCursor,Math.max(0,selectedRouteDoctorIds.size-1));renderDoctors();}
+  function clearSelectedRouteDoctors(){selectedRouteDoctorIds.clear();selectedRouteCursor=0;renderDoctors();}
   function selectShownRouteDoctors(){lastRenderedDoctorIds.forEach(id=>selectedRouteDoctorIds.add(id));doctorRouteSelectMode=true;renderDoctors();}
   function doctorRouteAddress(doctor){return clean(doctor?.address||doctor?.hospitalAddress||'');}
   function doctorRouteGoogleQuery(doctor){
     if(!doctor)return '';
     const name=cleanGpsQueryPart(doctor.name),hospital=cleanGpsQueryPart(doctorHospital(doctor)),address=cleanGpsQueryPart(doctorRouteAddress(doctor));
-    const coords=doctorRouteHasGps(doctor)?`${num(doctor.latitude)},${num(doctor.longitude)}`:'';
-    const fallback=address?'':cleanGpsQueryPart(coords||[inferDoctorArea(doctor),doctor.hq||state.profile.hq,'Gujarat','India'].filter(Boolean).join(', '));
-    return [name,hospital,address||fallback].filter(Boolean).join(', ');
+    const type=cleanGpsQueryPart(doctorType(doctor)),area=cleanGpsQueryPart(inferDoctorArea(doctor)),hq=cleanGpsQueryPart(doctor.hq||state.profile.hq||'Ahmedabad');
+    if(address)return [name,hospital,address].filter(Boolean).join(', ');
+    return [name,hospital,type,area,hq,'Gujarat','India'].filter(Boolean).join(', ');
   }
   function doctorRouteGoogleUrl(doctor){const q=doctorRouteGoogleQuery(doctor);return q?`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`:'';}
   function doctorRouteHasGps(doctor){return Boolean(num(doctor?.latitude)&&num(doctor?.longitude));}
@@ -963,42 +979,40 @@ function orderMiniCard(o){
     if(doctorRouteHasGps(doctor)&&(status.verified||!doctorRouteHasAddress(doctor)))return `${num(doctor.latitude)},${num(doctor.longitude)}`;
     return doctorRouteGoogleQuery(doctor)||`${num(doctor.latitude)},${num(doctor.longitude)}`;
   }
-  function selectedRouteDistance(order,start){if(!order.length||!start)return 0;let total=0,lat=num(start.latitude),lng=num(start.longitude);for(const d of order){if(!doctorRouteHasGps(d))continue;total+=smartRoadKm(lat,lng,d.latitude,d.longitude);lat=num(d.latitude);lng=num(d.longitude);}return total;}
-  function optimizeSelectedDoctorRoute(doctors,start){
-    const gpsDoctors=doctors.filter(doctorRouteHasGps),addressOnly=doctors.filter(d=>!doctorRouteHasGps(d)&&doctorRouteHasAddress(d));
-    // Mixed GPS/address routes keep the user's tap-selection order. Reordering them without coordinates would be a guess.
-    if(addressOnly.length)return {ordered:doctors.slice(),totalKm:selectedRouteDistance(doctors,start),gpsCount:gpsDoctors.length,addressCount:addressOnly.length,optimized:false};
-    const remaining=gpsDoctors.slice(),ordered=[];let lat=num(start.latitude),lng=num(start.longitude);
-    while(remaining.length){let bestIndex=0,best=Infinity;remaining.forEach((d,i)=>{const km=smartRoadKm(lat,lng,d.latitude,d.longitude);if(km<best){best=km;bestIndex=i;}});const d=remaining.splice(bestIndex,1)[0];ordered.push(d);lat=num(d.latitude);lng=num(d.longitude);}
-    let bestDistance=selectedRouteDistance(ordered,start),improved=true,passes=0;
-    while(improved&&passes++<4){improved=false;for(let i=0;i<ordered.length-1;i++){for(let k=i+1;k<ordered.length;k++){const candidate=ordered.slice(0,i).concat(ordered.slice(i,k+1).reverse(),ordered.slice(k+1)),distance=selectedRouteDistance(candidate,start);if(distance+0.02<bestDistance){ordered.splice(0,ordered.length,...candidate);bestDistance=distance;improved=true;}}}}
-    return {ordered,totalKm:bestDistance,gpsCount:gpsDoctors.length,addressCount:0,optimized:true};
+  function doctorRouteNavigateUrl(doctor){
+    const destination=doctorRouteOperand(doctor);if(!destination)return '';
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}&travelmode=driving&dir_action=navigate`;
   }
-  function selectedDoctorRouteLegs(start,ordered){
-    const legs=[];let origin=`${num(start.latitude)},${num(start.longitude)}`,index=0;
-    // Keep URLs comfortably below platform limits. Each stop may be coordinates or a Google-resolved name/hospital/address query. Four stops per link stays within conservative mobile waypoint limits.
-    while(index<ordered.length){
-      const stops=ordered.slice(index,index+4),operands=stops.map(doctorRouteOperand).filter(Boolean),dest=operands[operands.length-1],waypoints=operands.slice(0,-1).join('|');
-      if(!dest)break;
-      const url=`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(dest)}${waypoints?`&waypoints=${encodeURIComponent(waypoints)}`:''}&travelmode=driving`;
-      legs.push({url,stops,from:index+1,to:index+stops.length});origin=dest;index+=stops.length;
-    }
-    return legs;
+  function selectedRouteDistance(order,start){if(!order.length||!start)return 0;let total=0,lat=num(start.latitude),lng=num(start.longitude),seen=false;for(const d of order){if(!doctorRouteHasGps(d))continue;total+=smartRoadKm(lat,lng,d.latitude,d.longitude);lat=num(d.latitude);lng=num(d.longitude);seen=true;}return seen?total:0;}
+  function rerenderSelectedRouteFromSheet(){
+    const lat=num($('#selectedrouteLatitude')?.value),lng=num($('#selectedrouteLongitude')?.value),accuracy=num($('#selectedrouteAccuracy')?.value);
+    if(lat&&lng)renderSelectedDoctorRoutePreview(lat,lng,accuracy);else renderSelectedDoctorRoutePreview(0,0,0);
+  }
+  function changeSelectedRouteCursor(delta){
+    const list=selectedRouteDoctors();if(!list.length)return;
+    selectedRouteCursor=Math.max(0,Math.min(list.length-1,selectedRouteCursor+delta));rerenderSelectedRouteFromSheet();
   }
   function renderSelectedDoctorRoutePreview(latitude,longitude,accuracy=0){
     const out=$('#selectedRouteResults');if(!out)return;
-    const selected=selectedRouteDoctors(),missing=selected.filter(d=>!doctorRouteRoutable(d)),ready=selected.filter(doctorRouteRoutable);
-    if(!ready.length){out.innerHTML=`${empty('Selected doctors need either a saved GPS pin or a clinic address.')}${missing.length?`<div class="detail-section"><h4>Location required</h4>${missing.map(d=>`<div class="ledger-row"><div class="copy"><strong>${esc(doctorDisplayName(d))}</strong><small>${esc([doctorHospital(d),inferDoctorArea(d),'Add address or verify GPS'].filter(Boolean).join(' • '))}</small></div><div class="value"><button data-action="view-record" data-type="doctor" data-id="${esc(d.id)}">Open</button></div></div>`).join('')}</div>`:''}`;return;}
-    const start={latitude:num(latitude),longitude:num(longitude)},plan=optimizeSelectedDoctorRoute(ready,start),legs=selectedDoctorRouteLegs(start,plan.ordered);
-    const routeRows=plan.ordered.map((d,i)=>{const v=doctorLocationVerification(d),mode=doctorRouteHasGps(d)?(v.verified?'Verified GPS':'Saved GPS'):'Address',query=doctorRouteGoogleQuery(d);return `<div class="route-stop"><span>${i+1}</span><div><strong>${esc(doctorDisplayName(d))}</strong><small>${esc([mode,doctorHospital(d),doctorRouteAddress(d)||inferDoctorArea(d)].filter(Boolean).join(' • '))}</small><em>${esc(query)}</em></div><div class="route-stop-actions"><a class="btn secondary compact" href="${doctorRouteGoogleUrl(d)}" target="_blank" rel="noopener">Google check</a><button class="btn secondary compact" data-action="verify-doctor-location" data-id="${esc(d.id)}">Verify</button></div></div>`;}).join('');
-    const mapButtons=legs.length===1?`<a class="btn primary full" href="${legs[0].url}" target="_blank" rel="noopener">Open selected route in Google Maps</a>`:`<div class="detail-section"><h4>Google Maps route legs</h4><p class="muted-line">${esc(ready.length)} selected doctors are split into smaller route links for reliable mobile Maps URLs.</p>${legs.map((leg,i)=>`<a class="btn primary full route-leg-btn" href="${leg.url}" target="_blank" rel="noopener">Open leg ${i+1} • doctors ${leg.from}–${leg.to}</a>`).join('')}</div>`;
-    out.innerHTML=`<div class="manager-summary"><div><small>SELECTED</small><strong>${esc(selected.length)}</strong></div><div><small>GPS</small><strong>${esc(plan.gpsCount)}</strong></div><div><small>ADDRESS</small><strong>${esc(plan.addressCount)}</strong></div></div><div class="notice">Search/verification uses Doctor name + Hospital/Clinic + full address. Verified GPS stops use their saved coordinates; address-only stops are resolved by Google Maps when the route opens. Mixed GPS/address routes keep your selection order; all-GPS routes can be locally optimized. Starts from your current GPS${accuracy?` (±${esc(Math.round(accuracy))} m)`:''}.</div><div class="selected-route-list">${routeRows}</div>${mapButtons}${missing.length?`<div class="detail-section route-missing"><h4>${esc(missing.length)} selected doctor${missing.length===1?'':'s'} not added</h4>${missing.map(d=>`<div class="ledger-row"><div class="copy"><strong>${esc(doctorDisplayName(d))}</strong><small>No GPS and no clinic address • ${esc(inferDoctorArea(d))}</small></div><div class="value"><button data-action="view-record" data-type="doctor" data-id="${esc(d.id)}">Add location</button></div></div>`).join('')}</div>`:''}`;
+    const selected=selectedRouteDoctors();
+    if(!selected.length){out.innerHTML=empty('No doctors selected.');return;}
+    selectedRouteCursor=Math.max(0,Math.min(selected.length-1,selectedRouteCursor));
+    const routable=selected.filter(doctorRouteRoutable),needsLocation=selected.filter(d=>!doctorRouteRoutable(d));
+    const start=latitude&&longitude?{latitude:num(latitude),longitude:num(longitude)}:null,totalKm=start?selectedRouteDistance(selected,start):0;
+    const current=selected[selectedRouteCursor],currentReady=doctorRouteRoutable(current),currentNavigate=currentReady?doctorRouteNavigateUrl(current):'';
+    const routeRows=selected.map((d,i)=>{
+      const v=doctorLocationVerification(d),hasGps=doctorRouteHasGps(d),hasAddress=doctorRouteHasAddress(d),mode=hasGps?(v.verified?'Verified GPS':'Saved GPS'):(hasAddress?'Address':'Find address'),query=doctorRouteGoogleQuery(d),nav=doctorRouteNavigateUrl(d),active=i===selectedRouteCursor;
+      return `<div class="route-stop ${active?'active':''} ${!doctorRouteRoutable(d)?'route-risk':''}"><span>${i+1}</span><div><strong>${esc(doctorDisplayName(d))}</strong><small>${esc([mode,doctorHospital(d),doctorRouteAddress(d)||inferDoctorArea(d),doctorType(d)].filter(Boolean).join(' • '))}</small><em>${esc(query)}</em></div><div class="route-stop-actions"><button class="btn secondary compact" data-action="route-move-up" data-id="${esc(d.id)}" ${i===0?'disabled':''}>↑</button><button class="btn secondary compact" data-action="route-move-down" data-id="${esc(d.id)}" ${i===selected.length-1?'disabled':''}>↓</button><button class="btn secondary compact" data-action="route-move-to" data-id="${esc(d.id)}">Move</button><a class="btn secondary compact" href="${doctorRouteGoogleUrl(d)}" target="_blank" rel="noopener">${hasAddress||hasGps?'Google check':'Find address'}</a>${nav?`<a class="btn primary compact" href="${nav}" target="_blank" rel="noopener">Navigate</a>`:''}</div></div>`;
+    }).join('');
+    const nextCard=`<div class="detail-section"><h4>Next stop • ${esc(selectedRouteCursor+1)} / ${esc(selected.length)}</h4><div class="note-box"><strong>${esc(doctorDisplayName(current))}</strong><br>${esc([doctorHospital(current),doctorRouteAddress(current)||inferDoctorArea(current),doctorType(current)].filter(Boolean).join(' • '))}</div><div class="button-row"><button class="btn secondary" data-action="route-prev" ${selectedRouteCursor===0?'disabled':''}>Previous</button>${currentNavigate?`<a class="btn primary" href="${currentNavigate}" target="_blank" rel="noopener">Navigate next in Google Maps</a>`:`<a class="btn primary" href="${doctorRouteGoogleUrl(current)}" target="_blank" rel="noopener">Find / confirm address</a>`}<button class="btn secondary" data-action="route-next" ${selectedRouteCursor===selected.length-1?'disabled':''}>Done → Next</button></div></div>`;
+    out.innerHTML=`<div class="manager-summary"><div><small>FULL ROUTE</small><strong>${esc(selected.length)}</strong></div><div><small>READY</small><strong>${esc(routable.length)}</strong></div><div><small>NEEDS ADDRESS</small><strong>${esc(needsLocation.length)}</strong></div></div><div class="notice"><strong>One route, never split.</strong> Your selected order is the route order. Use ↑ / ↓ / Move to arrange all ${esc(selected.length)} doctors. Google Maps is opened only for the current next doctor, while MR One keeps the complete route intact.${totalKm?` Saved-GPS chain is about ${esc(totalKm.toFixed(1))} km before Google road calculation.`:''}${accuracy?` Current GPS accuracy ±${esc(Math.round(accuracy))} m.`:''}</div>${nextCard}<div class="selected-route-list">${routeRows}</div>${needsLocation.length?`<div class="notice">${esc(needsLocation.length)} doctor${needsLocation.length===1?'':'s'} stay inside this same route but need address/GPS confirmation before navigation. Use Find address; search uses Doctor + Hospital/Clinic + Type + Area/City, then save the confirmed address/GPS.</div>`:''}`;
   }
   function buildSelectedDoctorRoute(){
     const selected=selectedRouteDoctors();if(!selected.length){toast('Select at least one doctor first.');return;}
-    openSheet('Selected doctor route',`${selected.length} selected • GPS or address → Google cross-check → Maps`,`<div class="notice"><strong>Search rule:</strong> Doctor name + Hospital/Clinic + Address. Doctors can be routed with either saved GPS or a saved address.</div><div class="location-card"><div class="location-head"><div><strong>Route start</strong><small id="selectedrouteLocationStatus" class="location-status loading">Fetching current GPS…</small></div><button type="button" id="selectedrouteFetchLocation" class="btn secondary compact">Refresh GPS</button></div><a id="selectedrouteLocationMap" class="hidden" target="_blank" rel="noopener">View my location</a><input id="selectedrouteLatitude" type="hidden"><input id="selectedrouteLongitude" type="hidden"><input id="selectedrouteAccuracy" type="hidden"><input id="selectedrouteCapturedAt" type="hidden"></div><div id="selectedRouteResults">${empty('Preparing route from your current location…')}</div>`);
+    selectedRouteCursor=0;
+    openSheet('Selected doctor route',`${selected.length} doctors • one full manual order • Navigate next`,`<div class="notice"><strong>Full route:</strong> all selected doctors stay together. Arrange the complete list yourself; MR One never splits it into Google route legs.</div><div class="location-card"><div class="location-head"><div><strong>My current location</strong><small id="selectedrouteLocationStatus" class="location-status loading">Fetching current GPS…</small></div><button type="button" id="selectedrouteFetchLocation" class="btn secondary compact">Refresh GPS</button></div><a id="selectedrouteLocationMap" class="hidden" target="_blank" rel="noopener">View my location</a><input id="selectedrouteLatitude" type="hidden"><input id="selectedrouteLongitude" type="hidden"><input id="selectedrouteAccuracy" type="hidden"><input id="selectedrouteCapturedAt" type="hidden"></div><div id="selectedRouteResults">${empty('Preparing your full selected route…')}</div>`);
     if(selectedRouteGpsListener)document.removeEventListener('mr-location-ready',selectedRouteGpsListener);selectedRouteGpsListener=e=>{if(e.detail?.prefix!=='selectedroute')return;renderSelectedDoctorRoutePreview(e.detail.latitude,e.detail.longitude,e.detail.accuracy||0);};document.addEventListener('mr-location-ready',selectedRouteGpsListener);
-    if(lastFieldLocation){$('#selectedrouteLatitude').value=lastFieldLocation.latitude;$('#selectedrouteLongitude').value=lastFieldLocation.longitude;$('#selectedrouteAccuracy').value=lastFieldLocation.accuracy||'';renderSelectedDoctorRoutePreview(lastFieldLocation.latitude,lastFieldLocation.longitude,lastFieldLocation.accuracy||0);}
+    if(lastFieldLocation){$('#selectedrouteLatitude').value=lastFieldLocation.latitude;$('#selectedrouteLongitude').value=lastFieldLocation.longitude;$('#selectedrouteAccuracy').value=lastFieldLocation.accuracy||'';renderSelectedDoctorRoutePreview(lastFieldLocation.latitude,lastFieldLocation.longitude,lastFieldLocation.accuracy||0);}else renderSelectedDoctorRoutePreview(0,0,0);
     setupLocationCapture('selectedroute',true);
   }
 
@@ -2459,6 +2473,11 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
         if(action==='select-shown-route-doctors')selectShownRouteDoctors();
         if(action==='clear-route-doctors')clearSelectedRouteDoctors();
         if(action==='build-selected-doctor-route')buildSelectedDoctorRoute();
+        if(action==='route-move-up')moveSelectedRouteDoctor(id,-1);
+        if(action==='route-move-down')moveSelectedRouteDoctor(id,1);
+        if(action==='route-move-to')moveSelectedRouteDoctorTo(id);
+        if(action==='route-prev')changeSelectedRouteCursor(-1);
+        if(action==='route-next')changeSelectedRouteCursor(1);
         if(action==='quick-complete-doctor')quickCompleteDoctor();
         if(action==='area-time-plan')areaTimeDoctorPlan();
         if(action==='edit-tour-plan')editTourPlan(id);
