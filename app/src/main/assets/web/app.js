@@ -3,7 +3,7 @@
 
   const STORE_KEY = 'mr-daily-auto-v3';
   const STORE_BACKUP_KEY = 'mr-daily-auto-v3-last-good';
-  const APP_VERSION = 1.42;
+  const APP_VERSION = 1.82;
   const METRICS = [
     ['calls', 'Calls'],
     ['inputs', 'Input Distributed'],
@@ -355,6 +355,7 @@ function defaultSchemes() {
       clinicActions: [],
       rcpa: [],
       salesMonths: [],
+      weeklyBusiness: [],
       opening: {monthKey: monthKey(today), calls:0, inputs:0, basket:0, towel:0, conversation:0, newAvailability:0, pobValue:0},
       imports: [],
       settings: {bundledImportAttempted:false, embeddedSeedLoaded:false, pinHash:'', installedHintSeen:false, workflowMode:'field', nearbyRadiusMeters:1000, expenseRatePerKm:0, theme:'system', haptics:true}
@@ -390,6 +391,7 @@ function defaultSchemes() {
       clinicActions: Array.isArray(raw?.clinicActions) ? raw.clinicActions : [],
       rcpa: Array.isArray(raw?.rcpa) ? raw.rcpa : [],
       salesMonths: Array.isArray(raw?.salesMonths) ? raw.salesMonths : [],
+      weeklyBusiness: Array.isArray(raw?.weeklyBusiness) ? raw.weeklyBusiness : [],
       imports: Array.isArray(raw?.imports) ? raw.imports : []
     };
     out.doctors.forEach(d => {
@@ -400,6 +402,12 @@ function defaultSchemes() {
       d.area = inferDoctorArea(d) || clean(d.area || d.hq);
       d.speciality = clean(d.speciality || d.specialty);
       d.specialty = clean(d.specialty || d.speciality);
+      d.coreCategory = ['C','NC'].includes(String(d.coreCategory||'').toUpperCase()) ? String(d.coreCategory).toUpperCase() : '';
+      d.productFocus = clean(d.productFocus || d.campaign);
+      d.potentialUnits = Math.max(0,num(d.potentialUnits));
+      d.inputGivenDate = dateOnly(d.inputGivenDate);
+      d.dmLastVisit = dateOnly(d.dmLastVisit);
+      d.rmLastVisit = dateOnly(d.rmLastVisit);
       d.meetingDays = normalizeMeetingDays(d.meetingDays);
       d.meetingFrom = normalizeTime(d.meetingFrom); d.meetingTo = normalizeTime(d.meetingTo);
       d.meetingFrom2 = normalizeTime(d.meetingFrom2); d.meetingTo2 = normalizeTime(d.meetingTo2);
@@ -873,7 +881,15 @@ function discoverNearbyHospitals(){
     else if(activePage==='visits')renderVisits();
     else if(activePage==='tools')renderTools();
   }
-  function renderAll() { renderHeader(); renderActivePage(); }
+  function enhanceAccessibility(root=document){
+    $$('button',root).forEach(b=>{if(!b.hasAttribute('type'))b.type='button';const visible=clean(b.textContent);if(!b.getAttribute('aria-label')&&!visible)b.setAttribute('aria-label',clean(b.title||b.dataset.action||'Action').replace(/[-_]+/g,' '));});
+    $$('input[type="search"]',root).forEach(i=>{if(!i.getAttribute('aria-label'))i.setAttribute('aria-label',clean(i.placeholder||'Search'));});
+    $$('.bottom-nav button',root).forEach(b=>b.setAttribute('aria-current',b.classList.contains('active')?'page':'false'));
+    const sheet=$('#editorSheet');if(sheet){sheet.setAttribute('aria-labelledby','sheetTitle');sheet.setAttribute('aria-describedby','sheetSubtitle');}
+    const close=$('[data-close-sheet]');if(close&&!close.getAttribute('aria-label'))close.setAttribute('aria-label','Close dialog');
+  }
+  function renderAll() { renderHeader(); renderActivePage(); enhanceAccessibility(); }
+
   function renderHeader() {
     $('#profileLine').textContent = `${state.profile.hq || 'My HQ'} • ${state.profile.tmName || 'TM'}`;
     const h=now().getHours();
@@ -1150,7 +1166,7 @@ function orderMiniCard(o){
     const month=monthKey(localISODate());
     if(state.opening.monthKey!==month) state.opening={monthKey:month,...metricBlank()};
     $('#openingFields').innerHTML=METRICS.map(([k,label])=>`<label><span>${esc(label)}</span><input name="${k}" type="number" step="${k==='pobValue'?'0.01':'1'}" min="0" value="${esc(state.opening[k]||0)}"></label>`).join('');
-    $('#importHistory').innerHTML=state.imports.slice().reverse().slice(0,6).map(i=>`<div class="import-item"><div><strong>${esc(i.file)}</strong><small>${esc(i.summary)}</small></div><small>${esc(prettyDate(i.date))}</small></div>`).join('');
+    $('#importHistory').innerHTML=state.imports.slice().reverse().slice(0,6).map(i=>`<div class="import-item"><div><strong>${esc(i.file)}</strong><small>${esc(i.summary)}</small>${i.issues?.length?`<details class="import-issues"><summary>${i.issues.length} import warning${i.issues.length===1?'':'s'} — review</summary><ul>${i.issues.slice(0,20).map(x=>`<li>${esc(x)}</li>`).join('')}</ul></details>`:''}</div><small>${esc(prettyDate(i.date))}</small></div>`).join('');
     $('#distributorCountText').textContent=`${state.distributors.length} distributors • ${state.orders.length} orders`;
     const active=state.schemes.filter(x=>schemeState(x)==='active').length;
     $('#schemeCountText').textContent=`${active} active • ${state.schemes.length} total date-wise schemes`;
@@ -2144,7 +2160,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
       <form id="recordForm" class="sheet-form">
         <label><span>${isDoctor?'Doctor name':'Chemist name'}</span><input id="recordName" name="name" required autocomplete="off" value="${esc(old.name||'')}" placeholder="${isDoctor?'Type doctor name':'Type chemist name'}"></label>
         ${!isDoctor?`<label><span>Preferred distributor (optional)</span><select name="linkedDistributorId">${distributorOptions(preferredDistributor(old)?.id||'')}</select></label>`:''}
-        ${isDoctor?`<label><span>Hospital / clinic / firm name</span><input id="recordHospital" name="hospital" required autocomplete="off" value="${esc(doctorHospital(old))}" placeholder="Type hospital or clinic name"></label><div class="fast-google-verify"><a id="recordGoogleVerifyBtn" class="btn secondary full" href="#" target="_blank" rel="noopener">Google verify doctor + firm</a><small id="recordGoogleVerifyQuery" class="muted-line">Enter doctor + hospital/firm name to verify.</small></div><details id="recordAdvancedDetails" class="fast-entry-details" ${id?'open':''}><summary>More details <small>chemist, timing, address, GPS, notes</small></summary><div class="fast-entry-details-body"><div class="lookup-label field-block"><span class="field-caption">Doctor under chemist</span><div class="lookup-field"><input id="recordChemistSearch" type="search" autocomplete="off" value="${esc(linkedChemist(old)?.name||'')}" placeholder="Search chemist name or area…"><input id="recordChemistId" name="linkedChemistId" type="hidden" value="${esc(existingChemist)}"><div id="recordChemistResults" class="search-results lookup-results hidden"></div></div></div><div class="field-grid two"><label><span>Monthly visits</span><select name="monthlyVisitTarget"><option value="1" ${doctorVisitPolicy(old).target===1?'selected':''}>1× / month</option><option value="2" ${doctorVisitPolicy(old).target===2?'selected':''}>2× / month</option><option value="3" ${doctorVisitPolicy(old).target===3?'selected':''}>3× / month</option><option value="4" ${doctorVisitPolicy(old).target===4?'selected':''}>4× / month</option></select></label><label><span>Custom minimum gap days</span><input name="minVisitGapDays" type="number" min="0" max="31" value="${esc(num(old.minVisitGapDays)||0)}" placeholder="0 = automatic"></label></div><div class="schedule-card clinic-system-card"><div class="form-section-title"><h3>Clinic meeting system</h3><p>Field access comes before route planning.</p></div><label><span>Clinic system</span><select id="recordClinicSystem" name="clinicSystem"><option value="direct" ${doctorClinicSystem(old)==='direct'?'selected':''}>Direct meeting in saved days/time</option><option value="appointment" ${doctorClinicSystem(old)==='appointment'?'selected':''}>Appointment required</option><option value="card_later" ${doctorClinicSystem(old)==='card_later'?'selected':''}>Card drop first → later meeting</option></select></label><div id="recordCardDropFields" class="field-grid two ${doctorClinicSystem(old)==='card_later'?'':'hidden'}"><label><span>Card drop time</span><input name="cardDropTime" type="time" value="${esc(doctorCardDropTime(old))}"></label><div class="notice">Mark Card given ✓ on the day. Only then later meeting enters the route.</div></div></div><div id="recordMeetingTimingCard" class="schedule-card ${doctorClinicSystem(old)==='appointment'?'appointment-mode-muted':''}"><div class="form-section-title"><h3>Doctor meeting timing</h3><p>Direct/card-later use this window. Appointment-only doctors can leave regular timing blank.</p></div><div class="schedule-quick"><button type="button" id="monSatDaysBtn">Mon–Sat</button><button type="button" id="allDaysBtn">Every day</button><button type="button" id="clearDaysBtn">Clear</button></div><div class="day-selector">${DAY_NAMES.map((day,i)=>`<label class="day-option"><input type="checkbox" name="meetingDays" value="${i}" ${normalizeMeetingDays(old.meetingDays).includes(i)?'checked':''}><span>${day}</span></label>`).join('')}</div><div class="field-grid two timing-grid"><label><span>First timing from</span><input name="meetingFrom" type="time" value="${esc(normalizeTime(old.meetingFrom))}"></label><label><span>First timing to</span><input name="meetingTo" type="time" value="${esc(normalizeTime(old.meetingTo))}"></label><label><span>Second timing from (optional)</span><input name="meetingFrom2" type="time" value="${esc(normalizeTime(old.meetingFrom2))}"></label><label><span>Second timing to (optional)</span><input name="meetingTo2" type="time" value="${esc(normalizeTime(old.meetingTo2))}"></label></div></div>`:''}
+        ${isDoctor?`<label><span>Hospital / clinic / firm name</span><input id="recordHospital" name="hospital" required autocomplete="off" value="${esc(doctorHospital(old))}" placeholder="Type hospital or clinic name"></label><div class="fast-google-verify"><a id="recordGoogleVerifyBtn" class="btn secondary full" href="#" target="_blank" rel="noopener">Google verify doctor + firm</a><small id="recordGoogleVerifyQuery" class="muted-line">Enter doctor + hospital/firm name to verify.</small></div><details id="recordAdvancedDetails" class="fast-entry-details" ${id?'open':''}><summary>More details <small>chemist, timing, address, GPS, notes</small></summary><div class="fast-entry-details-body"><div class="lookup-label field-block"><span class="field-caption">Doctor under chemist</span><div class="lookup-field"><input id="recordChemistSearch" type="search" autocomplete="off" value="${esc(linkedChemist(old)?.name||'')}" placeholder="Search chemist name or area…"><input id="recordChemistId" name="linkedChemistId" type="hidden" value="${esc(existingChemist)}"><div id="recordChemistResults" class="search-results lookup-results hidden"></div></div></div><div class="weekly-report-fields"><div class="form-section-title"><h3>TM weekly / company data</h3><p>Saved once and reused automatically in weekly Excel reports.</p></div><div class="field-grid two"><label><span>Speciality</span><input name="speciality" value="${esc(old.speciality||old.specialty||'')}" placeholder="PEDIA / GYNAEC / GP"></label><label><span>C / NC</span><select name="coreCategory"><option value="">Not set</option><option value="C" ${String(old.coreCategory||'').toUpperCase()==='C'?'selected':''}>C — Core</option><option value="NC" ${String(old.coreCategory||'').toUpperCase()==='NC'?'selected':''}>NC — Non Core</option></select></label><label><span>Focused brand</span><input name="productFocus" value="${esc(old.productFocus||old.campaign||'')}" placeholder="Simyl MCT / MumMum 1…"></label><label><span>Potential (unit/month)</span><input name="potentialUnits" type="number" min="0" step="1" value="${esc(num(old.potentialUnits)||'')}"></label><label><span>Input given date</span><input name="inputGivenDate" type="date" value="${esc(dateOnly(old.inputGivenDate))}"></label><label><span>DM last visit</span><input name="dmLastVisit" type="date" value="${esc(dateOnly(old.dmLastVisit))}"></label><label><span>RM last visit</span><input name="rmLastVisit" type="date" value="${esc(dateOnly(old.rmLastVisit))}"></label></div></div><div class="field-grid two"><label><span>Monthly visits</span><select name="monthlyVisitTarget"><option value="1" ${doctorVisitPolicy(old).target===1?'selected':''}>1× / month</option><option value="2" ${doctorVisitPolicy(old).target===2?'selected':''}>2× / month</option><option value="3" ${doctorVisitPolicy(old).target===3?'selected':''}>3× / month</option><option value="4" ${doctorVisitPolicy(old).target===4?'selected':''}>4× / month</option></select></label><label><span>Custom minimum gap days</span><input name="minVisitGapDays" type="number" min="0" max="31" value="${esc(num(old.minVisitGapDays)||0)}" placeholder="0 = automatic"></label></div><div class="schedule-card clinic-system-card"><div class="form-section-title"><h3>Clinic meeting system</h3><p>Field access comes before route planning.</p></div><label><span>Clinic system</span><select id="recordClinicSystem" name="clinicSystem"><option value="direct" ${doctorClinicSystem(old)==='direct'?'selected':''}>Direct meeting in saved days/time</option><option value="appointment" ${doctorClinicSystem(old)==='appointment'?'selected':''}>Appointment required</option><option value="card_later" ${doctorClinicSystem(old)==='card_later'?'selected':''}>Card drop first → later meeting</option></select></label><div id="recordCardDropFields" class="field-grid two ${doctorClinicSystem(old)==='card_later'?'':'hidden'}"><label><span>Card drop time</span><input name="cardDropTime" type="time" value="${esc(doctorCardDropTime(old))}"></label><div class="notice">Mark Card given ✓ on the day. Only then later meeting enters the route.</div></div></div><div id="recordMeetingTimingCard" class="schedule-card ${doctorClinicSystem(old)==='appointment'?'appointment-mode-muted':''}"><div class="form-section-title"><h3>Doctor meeting timing</h3><p>Direct/card-later use this window. Appointment-only doctors can leave regular timing blank.</p></div><div class="schedule-quick"><button type="button" id="monSatDaysBtn">Mon–Sat</button><button type="button" id="allDaysBtn">Every day</button><button type="button" id="clearDaysBtn">Clear</button></div><div class="day-selector">${DAY_NAMES.map((day,i)=>`<label class="day-option"><input type="checkbox" name="meetingDays" value="${i}" ${normalizeMeetingDays(old.meetingDays).includes(i)?'checked':''}><span>${day}</span></label>`).join('')}</div><div class="field-grid two timing-grid"><label><span>First timing from</span><input name="meetingFrom" type="time" value="${esc(normalizeTime(old.meetingFrom))}"></label><label><span>First timing to</span><input name="meetingTo" type="time" value="${esc(normalizeTime(old.meetingTo))}"></label><label><span>Second timing from (optional)</span><input name="meetingFrom2" type="time" value="${esc(normalizeTime(old.meetingFrom2))}"></label><label><span>Second timing to (optional)</span><input name="meetingTo2" type="time" value="${esc(normalizeTime(old.meetingTo2))}"></label></div></div>`:''}
         <label><span>Address</span><textarea name="address" rows="2" placeholder="Clinic / shop full address">${esc(old.address||'')}</textarea></label>
         <label><span>Area / place</span><input name="area" value="${esc((isDoctor?inferDoctorArea(old):old.area)||old.hq||state.profile.hq||'')}"></label>
         ${isDoctor?`<div class="location-card">
@@ -2179,7 +2195,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
         const anyTime=from||to||from2||to2;if(anyTime&&!days.length){toast('Choose doctor meeting day(s).');return;}if((from&&!to)||(!from&&to)||(from2&&!to2)||(!from2&&to2)){toast('Complete both From and To for each timing.');return;}if((from&&timeMinutes(to)<=timeMinutes(from))||(from2&&timeMinutes(to2)<=timeMinutes(from2))){toast('Meeting To time must be later than From time.');return;}if(days.length&&!anyTime){toast('Add at least one meeting time or clear the selected days.');return;}
         rec.meetingDays=days;rec.meetingFrom=from;rec.meetingTo=to;rec.meetingFrom2=from2;rec.meetingTo2=to2;
         rec.clinicSystem=clean(fd.get('clinicSystem'))||'direct';rec.cardDropTime=rec.clinicSystem==='card_later'?normalizeTime(fd.get('cardDropTime')):'';if(rec.clinicSystem==='card_later'&&!rec.cardDropTime){toast('Set card drop time.');return;}
-        rec.monthlyVisitTarget=Math.max(1,Math.min(4,Math.round(num(fd.get('monthlyVisitTarget'))||2)));rec.minVisitGapDays=Math.max(0,Math.round(num(fd.get('minVisitGapDays'))||0));
+        rec.speciality=clean(fd.get('speciality'));rec.specialty=rec.speciality;rec.coreCategory=clean(fd.get('coreCategory')).toUpperCase();rec.productFocus=clean(fd.get('productFocus'));rec.campaign=rec.campaign||rec.productFocus;rec.potentialUnits=Math.max(0,num(fd.get('potentialUnits')));rec.inputGivenDate=dateOnly(fd.get('inputGivenDate'));rec.dmLastVisit=dateOnly(fd.get('dmLastVisit'));rec.rmLastVisit=dateOnly(fd.get('rmLastVisit'));rec.monthlyVisitTarget=Math.max(1,Math.min(4,Math.round(num(fd.get('monthlyVisitTarget'))||2)));rec.minVisitGapDays=Math.max(0,Math.round(num(fd.get('minVisitGapDays'))||0));
         rec.linkedChemistId=clean(fd.get('linkedChemistId'));const c=chemistById(rec.linkedChemistId);rec.chemistName=c?.name||'';
       }
       if(!id){rec.createdAt=new Date().toISOString();arr.push(rec);}else Object.assign(old,rec);
@@ -2207,8 +2223,14 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
       extra=`<div class="detail-section"><h4>Preferred distributor</h4><div class="detail-address">${esc(dist?.name||'Not set')}</div></div><div class="detail-section"><h4>Doctors under this chemist</h4>${docs.length?docs.map(d=>`<button class="linked-doctor-row" data-action="view-record" data-type="doctor" data-id="${d.id}"><strong>${esc(doctorDisplayName(d))}</strong><small>${esc(inferDoctorArea(d)||'')} • ${esc(doctorType(d))}</small></button>`).join(''):empty('No doctor linked yet.')}</div>`;
     }
     const area=isDoctor?inferDoctorArea(r):(r.area||r.hq||'—');
-    const googleTools=isDoctor?`<div class="google-search-actions"><a class="btn secondary" href="${googleDoctorSearchUrl(r)}" target="_blank" rel="noopener">Google doctor name</a><a class="btn secondary" href="${googleAddressSearchUrl(r)}" target="_blank" rel="noopener">Google address</a>${clean(r.address||r.hospitalAddress)?`<button class="btn primary" data-action="resolve-doctor-gps" data-id="${esc(r.id)}">${r.latitude&&r.longitude?'Recheck GPS FREE':'Find GPS FREE'}</button>`:''}</div>`:'';
-    openSheet(isDoctor?doctorDisplayName(r):r.name,isDoctor?`${doctorType(r)} • Doctor profile`:'Chemist profile',`<div class="detail-hero"><div class="avatar">${esc(initials(r.name))}</div><div><div class="title-line"><h3>${esc(isDoctor?doctorDisplayName(r):r.name)}</h3>${isDoctor?`<span class="specialty-pill">${esc(doctorType(r))}</span>`:''}</div><p>${esc(isDoctor?(ch?.name||'Chemist not linked'):`${linkedDoctorCount(r.id)} doctors linked`)}</p></div></div><div class="detail-grid"><div class="detail-box"><small>Area</small><strong>${esc(area)}</strong></div><div class="detail-box"><small>Last meeting</small><strong>${esc(prettyDate(r.lastVisit))}</strong></div></div>${isDoctor&&doctorHospital(r)?`<div class="detail-section"><h4>Hospital / clinic</h4><div class="detail-address">${esc(doctorHospital(r))}</div></div>`:''}<div class="detail-section"><h4>Address</h4><div class="detail-address">${esc(r.address||'Not added')}</div></div>${googleTools}${map?`<a class="map-main-btn" href="${map}" target="_blank" rel="noopener">Open map location</a>`:''}${extra}${r.notes?`<div class="detail-section"><h4>Note</h4><div class="note-box">${esc(r.notes)}</div></div>`:''}<div class="detail-actions"><button data-action="log-record" data-type="${type}" data-id="${id}">${isDoctor?'Start doctor call':'Log meeting'}</button><button data-action="edit-record" data-type="${type}" data-id="${id}">Edit once</button><button data-close-sheet>Close</button></div><div class="detail-section"><h4>Meeting history</h4>${history.length?history.map(miniActivity).join(''):empty('No meetings yet.')}</div>`);
+    const googleTools=isDoctor?`<div class="google-search-actions"><a class="btn secondary" href="${googleDoctorSearchUrl(r)}" target="_blank" rel="noopener">Google doctor</a><a class="btn secondary" href="${googleAddressSearchUrl(r)}" target="_blank" rel="noopener">Verify firm</a>${clean(r.address||r.hospitalAddress)?`<button class="btn primary" data-action="resolve-doctor-gps" data-id="${esc(r.id)}">${r.latitude&&r.longitude?'Recheck GPS':'Find GPS'}</button>`:''}</div>`:'';
+    if(isDoctor){
+      const timing=doctorMeetingStatus(r),elig=doctorEligibilityForDate(r),apt=upcomingAppointments().find(x=>x.doctorId===r.id),products=suggestedProductsForDoctor(r),kind=doctorType(r),hospital=doctorHospital(r)||'Hospital / clinic not added',last=prettyDate(r.lastVisit),visitPolicy=doctorVisitPolicy(r),clinicSystem=doctorClinicSystemLabel(r),chemist=ch?.name||'Not linked',meetingTime=doctorMeetingTiming(r)||'Timing not set',aptText=apt?(apt.status==='Doctor will call'?`Doctor will call • ${prettyDate(apt.reminderDate||apt.date)}`:`${apt.status} • ${prettyDate(apt.date)}${apt.time?` • ${timeLabel(apt.time)}`:''}`):'No appointment';
+      const productText=products.join(' • ')||'No product focus mapped';
+      openSheet(doctorDisplayName(r),`${kind} • ${hospital}`,`<div class="doctor-premium-hero"><div class="doctor-premium-top"><div class="doctor-premium-avatar">${esc(initials(r.name))}</div><div class="doctor-premium-copy"><h3>${esc(doctorDisplayName(r))}</h3><p>${esc(hospital)}</p></div></div><div class="doctor-premium-chips"><span class="doctor-premium-chip accent">${esc(kind)}</span><span class="doctor-premium-chip">${esc(area||'Area pending')}</span><span class="doctor-premium-chip">${esc(timing.label)}</span></div></div><div class="doctor-snapshot"><div><small>Last call</small><strong>${esc(last)}</strong></div><div><small>Visit rule</small><strong>${esc(visitPolicy.label)}</strong></div><div><small>Access</small><strong>${esc(clinicSystem)}</strong></div></div><div class="doctor-primary-actions"><button class="call" data-action="log-record" data-type="doctor" data-id="${esc(id)}">Start doctor call</button>${map?`<a class="map" href="${map}" target="_blank" rel="noopener">Open route</a>`:`<a class="map" href="${googleAddressSearchUrl(r)}" target="_blank" rel="noopener">Find location</a>`}</div><section class="doctor-section"><div class="doctor-section-title">Today & access <span>LIVE</span></div><div class="doctor-section-body"><div class="doctor-info-row"><span>Meeting timing</span><strong>${esc(meetingTime)}</strong></div><div class="doctor-info-row"><span>Monthly status</span><strong>${esc(elig.reason)}</strong></div><div class="doctor-info-row"><span>Appointment</span><strong>${esc(aptText)}</strong></div></div></section><section class="doctor-section"><div class="doctor-section-title">Practice <span>360°</span></div><div class="doctor-section-body"><div class="doctor-info-row"><span>Hospital / clinic</span><strong>${esc(hospital)}</strong></div><div class="doctor-info-row"><span>Area</span><strong>${esc(area||'Not added')}</strong></div><div class="doctor-info-row"><span>Under chemist</span><strong>${esc(chemist)}</strong></div><div class="doctor-info-row"><span>Product focus</span><strong>${esc(productText)}</strong></div></div></section>${r.address?`<section class="doctor-section"><div class="doctor-section-title">Location <span>VERIFIED DATA</span></div><div class="doctor-section-body"><div class="doctor-info-row"><span>Address</span><strong>${esc(r.address)}</strong></div>${googleTools}</div></section>`:`<section class="doctor-section"><div class="doctor-section-title">Location <span>PENDING</span></div><div class="doctor-section-body">${googleTools}</div></section>`}<section class="doctor-section"><div class="doctor-section-title">Prescription feedback <span>LATEST</span></div><div class="doctor-section-body">${statusTags(latestStatuses(r.id,ch?.id||''))}</div></section>${r.notes?`<section class="doctor-section"><div class="doctor-section-title">Field note</div><div class="doctor-section-body"><div class="note-box">${esc(r.notes)}</div></div></section>`:''}<section class="doctor-section"><div class="doctor-section-title">Meeting history <span>${history.length}</span></div><div class="doctor-section-body">${history.length?history.map(miniActivity).join(''):empty('No meetings yet.')}</div></section><div class="doctor-bottom-actions"><button class="secondary" data-action="edit-record" data-type="doctor" data-id="${esc(id)}">Edit profile</button><button class="primary" data-action="log-record" data-type="doctor" data-id="${esc(id)}">Save next call</button></div>`);
+      return;
+    }
+    openSheet(r.name,'Chemist profile',`<div class="detail-hero"><div class="avatar">${esc(initials(r.name))}</div><div><div class="title-line"><h3>${esc(r.name)}</h3></div><p>${esc(`${linkedDoctorCount(r.id)} doctors linked`)}</p></div></div><div class="detail-grid"><div class="detail-box"><small>Area</small><strong>${esc(area)}</strong></div><div class="detail-box"><small>Last meeting</small><strong>${esc(prettyDate(r.lastVisit))}</strong></div></div><div class="detail-section"><h4>Address</h4><div class="detail-address">${esc(r.address||'Not added')}</div></div>${map?`<a class="map-main-btn" href="${map}" target="_blank" rel="noopener">Open map location</a>`:''}${extra}${r.notes?`<div class="detail-section"><h4>Note</h4><div class="note-box">${esc(r.notes)}</div></div>`:''}<div class="detail-actions"><button data-action="log-record" data-type="${type}" data-id="${id}">Log meeting</button><button data-action="edit-record" data-type="${type}" data-id="${id}">Edit once</button><button data-close-sheet>Close</button></div><div class="detail-section"><h4>Meeting history</h4>${history.length?history.map(miniActivity).join(''):empty('No meetings yet.')}</div>`);
   }
 
   function viewVisit(id) {
@@ -2290,6 +2312,58 @@ function workbookData(){
 function exportXLSX(){if(window.AndroidBridge?.saveWorkbook){window.AndroidBridge.saveWorkbook(`MR-Field-Data-${localISODate()}.xlsx`,JSON.stringify(workbookData()));toast('Choose where to save the Excel workbook.');}else{toast('XLSX export is available in the Android APK. Use CSV here.');}}
 function reportProductStatus(doctorId,product){const rows=doctorVisitRows(doctorId).filter(v=>v.productStatuses?.[product]);const latest=rows.slice(-1)[0],previous=rows.slice(-2,-1)[0];return {latest:latest?.productStatuses?.[product]||'',latestDate:latest?.date||'',previous:previous?.productStatuses?.[product]||'',previousDate:previous?.date||'',everPrescribed:rows.some(v=>v.productStatuses?.[product]==='prescribed')};}
 function prescriberCategory(info){if(info.latest==='prescribed'&&!info.previous)return 'New / Trial Prescriber';if(info.latest==='prescribed')return 'Regular / Continued';if(info.latest==='not_prescribed'&&info.everPrescribed)return 'Lost Prescriber';if(info.latest==='not_prescribed')return 'Not Prescribing';return 'Feedback Pending';}
+
+  const FISCAL_MONTHS=['APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC','JAN','FEB','MAR'];
+  const monthAbbrFromKey=k=>{const m=Number(String(k||'').slice(5,7));return ['','JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][m]||'';};
+  const monthKeyForAbbr=(abbr,ref=new Date())=>{const monthNo={JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,OCT:10,NOV:11,DEC:12}[abbr];let y=ref.getFullYear();if(monthNo<=3&&ref.getMonth()+1>=4)y++;if(monthNo>=4&&ref.getMonth()+1<=3)y--;return `${y}-${String(monthNo).padStart(2,'0')}`;};
+  const doctorReportSpeciality=d=>clean(d?.speciality||d?.specialty||d?.qualification||doctorType(d));
+  const doctorReportCategory=d=>clean(d?.coreCategory)||'';
+  function weeklyBusinessUnits(doctorId,product,month){
+    const exact=state.weeklyBusiness.filter(x=>x.doctorId===doctorId&&norm(x.product)===norm(product)&&x.month===month);
+    if(exact.length)return exact.reduce((n,x)=>n+num(x.units),0);
+    const rcpa=state.rcpa.filter(x=>x.doctorId===doctorId&&monthKey(x.date)===month&&norm(x.ourBrand)===norm(product));
+    if(rcpa.length)return rcpa.reduce((n,x)=>n+num(x.rxQty),0);
+    const orders=state.orders.filter(x=>x.doctorId===doctorId&&monthKey(x.date)===month);
+    return orders.reduce((sum,o)=>sum+(o.items||[]).filter(i=>norm(i.product)===norm(product)).reduce((n,i)=>n+num(i.qty),0),0);
+  }
+  function reportProducts(){return [...new Set([...focusProducts(),...state.weeklyBusiness.map(x=>clean(x.product)),...state.rcpa.map(x=>clean(x.ourBrand)),...state.orders.flatMap(o=>(o.items||[]).map(i=>clean(i.product)))]).values()].filter(Boolean);}
+  function productGroup(product){const p=norm(product);if(p.includes('mummum'))return 'MUMMUM';if(p.includes('simyl'))return 'SIMYL';if(p.includes('zefrich'))return 'ZEFRICH';if(p.includes('zioral'))return 'ZIORAL';return 'OTHER PRODUCTS';}
+  function weekOfMonth(date){const d=new Date(`${dateOnly(date)}T12:00:00`);return Math.min(5,Math.max(1,Math.ceil((d.getDate()+new Date(d.getFullYear(),d.getMonth(),1).getDay()-1)/7)));}
+  function tmWeeklyDataWorkbook(){
+    const ref=now(),currentMonth=monthKey(),monthName=ref.toLocaleDateString('en-IN',{month:'short',year:'2-digit'}).replace(' ','_').toLowerCase();
+    const monthVisits=state.visits.filter(v=>monthKey(v.date)===currentMonth),doctorCalls=monthVisits.filter(v=>v.entityType==='doctor'),chemistCalls=monthVisits.filter(v=>v.entityType==='chemist'),metDoctorIds=new Set(doctorCalls.filter(v=>!NOT_MET_OUTCOMES.has(v.outcome)).map(v=>v.doctorId));
+    const weekly=(type,w)=>monthVisits.filter(v=>v.entityType===type&&weekOfMonth(v.date)===w),workDays=w=>new Set(monthVisits.filter(v=>weekOfMonth(v.date)===w).map(v=>dateOnly(v.date))).size;
+    const weeklyAvg=(type,w)=>{const days=workDays(w);return days?+(weekly(type,w).length/days).toFixed(2):0;};
+    const countVisited=n=>state.doctors.filter(d=>doctorVisitRows(d.id).filter(v=>monthKey(v.date)===currentMonth&&!NOT_MET_OUTCOMES.has(v.outcome)).length===n).length;
+    const missed=state.doctors.filter(d=>!metDoctorIds.has(d.id));
+    const dataRows=[
+      [`MONTH - ${monthName}`],[`TM NAME : ${state.profile.tmName}`],[`HQ : ${state.profile.hq}`],
+      ['METRIC','1st Week','2nd Week','3rd Week','4th Week','5th Week'],
+      ['Total No. of Doctors in MCL',state.doctors.length,'','','',''],
+      ['Total No. of Doctors met',metDoctorIds.size,'','','',''],
+      ['DRS Call Average',...FISCAL_MONTHS.slice(0,5).map((_,i)=>weeklyAvg('doctor',i+1))],
+      ['Chemist Call Average',...FISCAL_MONTHS.slice(0,5).map((_,i)=>weeklyAvg('chemist',i+1))],
+      ['Total No. of Doctors 4 times visited',countVisited(4)],['Total No. of Doctors 3 times visited',countVisited(3)],['Total No. of Doctors 2 times visited',countVisited(2)],['Total No. of Doctors ONE time visited',countVisited(1)],['Total No. of Doctors missed',missed.length],
+      [],['MISSED DRS END OF THE MONTH'],['NO.','DRS NAME','SPECIALITY','AREA'],...missed.map((d,i)=>[i+1,d.name,doctorReportSpeciality(d),d.area||d.hq||''])
+    ];
+    const inputHeader=['SR. NO','TM NAME','TM HQ','DOCTOR NAME','SPLTY','AREA','FOCUSSED BRAND','POTENCIAL (UNIT/MNTH)','INPUT GIVEN DATE',...FISCAL_MONTHS];
+    const inputRows=[inputHeader];
+    state.doctors.forEach((d,i)=>{const products=(clean(d.productFocus)?clean(d.productFocus).split(','):reportProducts().filter(p=>state.weeklyBusiness.some(x=>x.doctorId===d.id&&norm(x.product)===norm(p)))).map(clean).filter(Boolean);const product=products[0]||'';inputRows.push([i+1,state.profile.tmName,state.profile.hq,d.name,doctorReportSpeciality(d),d.area||d.hq||'',product,num(d.potentialUnits)||'',dateOnly(d.inputGivenDate),...FISCAL_MONTHS.map(m=>product?weeklyBusinessUnits(d.id,product,monthKeyForAbbr(m,ref)):'')]);});
+    const patchRows=[['Week','Day','Patch Name','Dr.Name','Spe.','Time','C/NC']];
+    for(let w=1;w<=5;w++)for(let day=1;day<=6;day++)state.doctors.filter(d=>normalizeMeetingDays(d.meetingDays).includes(day)).sort((a,b)=>(a.area||'').localeCompare(b.area||'')||a.name.localeCompare(b.name)).forEach(d=>patchRows.push([`Week - ${w}`,DAY_NAMES[day],d.area||d.hq||'',d.name,doctorReportSpeciality(d),doctorMeetingTiming(d),doctorReportCategory(d)]));
+    const grouped={MUMMUM:[],SIMYL:[],ZEFRICH:[],ZIORAL:[], 'OTHER PRODUCTS':[]};
+    reportProducts().forEach(product=>{const candidates=state.doctors.filter(d=>norm(d.productFocus).includes(norm(product))||state.weeklyBusiness.some(x=>x.doctorId===d.id&&norm(x.product)===norm(product))||state.rcpa.some(x=>x.doctorId===d.id&&norm(x.ourBrand)===norm(product)));candidates.forEach((d,i)=>grouped[productGroup(product)].push([product,i+1,d.name,doctorReportSpeciality(d),d.area||d.hq||'',doctorReportCategory(d),num(d.potentialUnits)||'',...FISCAL_MONTHS.map(m=>weeklyBusinessUnits(d.id,product,monthKeyForAbbr(m,ref)))]));});
+    const brandHeader=['PRODUCT','Sr. No.','Name of Doctor (Rxber)','Speciality','AREA NAME','C/NC','Potencial (Unit/mnth)',...FISCAL_MONTHS];
+    const lostRows=[['NO.','TM NAME','HQ NAME','DR NAME','PLACE','SPECIALITY','C/NC','PRODUCT NAME','PREVIOUS UNIT/MNTH','CURRENT UNIT/MNTH','DM LAST VISIT','RM LAST VISIT','PREVIOUS STATUS','CURRENT STATUS','LAST MET','NEXT FOLLOW-UP']];
+    let lostNo=1;state.doctors.forEach(d=>reportProducts().forEach(product=>{const info=reportProductStatus(d.id,product),prevMonth=monthKeyForAbbr(FISCAL_MONTHS[(FISCAL_MONTHS.indexOf(monthAbbrFromKey(currentMonth))+11)%12],ref),prev=weeklyBusinessUnits(d.id,product,prevMonth),cur=weeklyBusinessUnits(d.id,product,currentMonth);if(info.latest||info.everPrescribed||prev||cur)lostRows.push([lostNo++,state.profile.tmName,state.profile.hq,d.name,d.area||d.hq||'',doctorReportSpeciality(d),doctorReportCategory(d),product,prev,cur,dateOnly(d.dmLastVisit),dateOnly(d.rmLastVisit),statusLabel(info.previous),statusLabel(info.latest),dateOnly(latestDoctorVisit(d.id,true)?.date),d.nextFollowUp||'']);}));
+    return {sheets:[{name:'DATA',rows:dataRows},{name:'INPUT',rows:inputRows},{name:'PATCH',rows:patchRows},{name:'MUMMUM',rows:[brandHeader,...grouped.MUMMUM]},{name:'SIMYL',rows:[brandHeader,...grouped.SIMYL]},{name:'ZEFRICH',rows:[brandHeader,...grouped.ZEFRICH]},{name:'ZIORAL',rows:[brandHeader,...grouped.ZIORAL]},{name:'LOST RXBER',rows:lostRows},{name:'OTHER PRODUCTS',rows:[brandHeader,...grouped['OTHER PRODUCTS']]}]};
+  }
+  function exportTmWeeklyData(){if(window.AndroidBridge?.saveWorkbook){window.AndroidBridge.saveWorkbook(`TM-WEEKLY-DATA-${localISODate()}.xlsx`,JSON.stringify(tmWeeklyDataWorkbook()));haptic('success');toast('Choose where to save TM Weekly Data Excel.');}else toast('TM Weekly XLSX export is available in the Android APK.');}
+  function addWeeklyBusiness(){
+    const products=reportProducts();openSheet('Product business units','Enter actual doctor-wise units. This feeds INPUT and product sheets automatically.',`<form id="weeklyBusinessForm" class="sheet-form"><label><span>Doctor</span><select name="doctorId" required><option value="">Select doctor</option>${state.doctors.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(d=>`<option value="${esc(d.id)}">${esc(doctorDisplayName(d))}</option>`).join('')}</select></label><label><span>Product / pack</span><input name="product" list="weeklyProductList" required placeholder="SIMYL MCT OIL"><datalist id="weeklyProductList">${products.map(p=>`<option value="${esc(p)}"></option>`).join('')}</datalist></label><div class="field-grid two"><label><span>Month</span><input name="month" type="month" required value="${esc(monthKey())}"></label><label><span>Business units/month</span><input name="units" type="number" min="0" step="1" required></label><label><span>Potential units/month</span><input name="potential" type="number" min="0" step="1"></label><label><span>Input given date</span><input name="inputDate" type="date"></label></div><div class="sticky-save"><button class="btn primary full" type="submit">Save business data</button></div></form>`);$('#weeklyBusinessForm').addEventListener('submit',e=>{e.preventDefault();const fd=new FormData(e.currentTarget),doctor=doctorById(fd.get('doctorId')),product=clean(fd.get('product')),month=clean(fd.get('month')),units=Math.max(0,num(fd.get('units')));if(!doctor||!product||!month){toast('Select doctor, product and month.');return;}let row=state.weeklyBusiness.find(x=>x.doctorId===doctor.id&&norm(x.product)===norm(product)&&x.month===month);if(row){row.units=units;row.updatedAt=new Date().toISOString();}else state.weeklyBusiness.push({id:uid('wb'),doctorId:doctor.id,doctorName:doctor.name,product,month,units,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});const potential=Math.max(0,num(fd.get('potential')));if(potential)doctor.potentialUnits=potential;const inputDate=dateOnly(fd.get('inputDate'));if(inputDate)doctor.inputGivenDate=inputDate;if(!clean(doctor.productFocus))doctor.productFocus=product;saveState();closeSheet();haptic('success');toast('Doctor business units saved. Weekly report updated.');});
+  }
+  function openWeeklyDataCenter(){const current=monthKey(),monthDoctorVisits=state.visits.filter(v=>v.entityType==='doctor'&&monthKey(v.date)===current),met=new Set(monthDoctorVisits.filter(v=>!NOT_MET_OUTCOMES.has(v.outcome)).map(v=>v.doctorId)),missing=state.doctors.filter(d=>!doctorReportSpeciality(d)||!doctorReportCategory(d)||!clean(d.productFocus)||!num(d.potentialUnits)).length;openSheet('TM Weekly Data','Excel-style reporting generated from the same data you fill during field work.',`<div class="weekly-report-hero"><span>WEEKLY REPORT ENGINE</span><h3>${esc(state.profile.tmName||'TM')} • ${esc(state.profile.hq||'HQ')}</h3><p>DATA + INPUT + PATCH + MUMMUM + SIMYL + ZEFRICH + ZIORAL + LOST RXBER</p></div><div class="manager-summary"><div><small>MCL DOCTORS</small><strong>${state.doctors.length}</strong></div><div><small>MET THIS MONTH</small><strong>${met.size}</strong></div><div><small>BUSINESS ROWS</small><strong>${state.weeklyBusiness.length}</strong></div><div><small>REPORT FIELDS PENDING</small><strong>${missing}</strong></div></div><div class="notice">Doctor calls and missed coverage are automatic. Speciality, C/NC, focus brand and potential are saved once in Doctor → More details. Product units can be entered here monthly.</div><div class="button-row"><button class="btn secondary" data-action="add-weekly-business">+ Business units</button><button class="btn primary" data-action="export-weekly-data">Export TM Weekly XLSX</button></div><div class="detail-section"><h4>What is generated</h4><div class="stack-list"><div class="ledger-row"><div class="copy"><strong>DATA</strong><small>Weekly call averages, doctor coverage, visit frequency and missed doctors.</small></div></div><div class="ledger-row"><div class="copy"><strong>INPUT</strong><small>Doctor + speciality + area + focused brand + potential + input date + monthly units.</small></div></div><div class="ledger-row"><div class="copy"><strong>PATCH</strong><small>Monday–Saturday doctor plan using saved area and meeting timing.</small></div></div><div class="ledger-row"><div class="copy"><strong>Product sheets</strong><small>MumMum, Simyl, Zefrich, Zioral and other products with doctor-wise monthly business.</small></div></div><div class="ledger-row"><div class="copy"><strong>LOST RXBER</strong><small>Previous/current units, prescription status, manager visits, last met and follow-up.</small></div></div></div></div>`);}
+
 function companyReportPackData(){
   const products=[...new Set((focusProducts().length?focusProducts():productCatalog()).filter(Boolean))],missing=[];
   state.doctors.forEach(d=>doctorCompleteness(d).missing.forEach(field=>missing.push(['Doctor Master',d.name,field,'Complete in Doctors / Meeting screen'])));
@@ -2344,10 +2418,10 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
   const HEADER_GROUPS={
     doctorName:['listeddoctorname','drname','doctorname','nameofdoctor','nameofdr','drsname','doctor'],
     chemistName:['nameofstockist','stockistname','chemistname','nameofchemist','pharmacyname','firmname','partyname','underchemist','doctorunderchemist','chemist'],
-    hq:['hq','hqname','managerhq'],area:['place','territory','area','location','city'],mobile:['contactnumber','mobilenumber','mobile','phone','contactno'],
+    hq:['hq','hqname','managerhq'],area:['place','territory','area','location'],city:['city','town','district'],mobile:['contactnumber','mobilenumber','mobile','phone','contactno','whatsapp','whatsappnumber','contact','cell','cellnumber','mobno','mobileno','phno','phoneno'],
     address:['address','fulladdress','clinicaddress','doctoraddress','chemistaddress'],hospital:['clinic','hospital','hospitalname','clinicname','nameofhospital','nameofclinic'],
     meetingDays:['meetingdays','visitdays','availabledays','doctordays'],meetingFrom:['meetingfrom','fromtime','visittimefrom','availablefrom'],meetingTo:['meetingto','totime','visittimeto','availableto'],
-    campaign:['campaign','productname','productfocus'],product:['product','productname','brand'],pts:['pts','billingprice','price'],
+    campaign:['campaign','productname','productfocus','focusbrand','focusedbrand'],speciality:['speciality','specialty','specialityname','specialtyname'],coreCategory:['cnc','category','corecategory'],potentialUnits:['potential','potentialunits','unitpotential','potentialunitmonth'],inputGivenDate:['inputdate','inputgivendate','dateofinput'],dmLastVisit:['dmlastvisit','dmlastvisitdate'],rmLastVisit:['rmlastvisit','rmlastvistdate','rmlastvisitdate'],product:['product','productname','brand'],pts:['pts','billingprice','price'],
     distributorName:['distributor','distributorname','stockistdistributor','preferreddistributor']
   };
   const hasHeader=(h,g)=>(HEADER_GROUPS[g]||[]).includes(canonical(h));
@@ -2356,6 +2430,39 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
   const rowVal=(row,headers,g)=>{const i=indexFor(headers,g);return i>=0?clean(row[i]):'';};
   const validName=v=>{const s=clean(v);return s.length>=3&&!/^\d+(\.\d+)?$/.test(s)&&!/^(total|name|doctor|stockist|chemist|product)$/i.test(s);};
   const mergeArrays=(a,b)=>[...new Set([...(a||[]),...(b||[])].map(clean).filter(Boolean))];
+
+  function normalizedMobile(value){
+    const raw=clean(value);if(!raw)return '';
+    const digits=raw.replace(/\D+/g,'');
+    const ten=digits.length===12&&digits.startsWith('91')?digits.slice(2):digits;
+    return /^\d{10}$/.test(ten)?ten:'';
+  }
+  function safePts(value){
+    const raw=clean(value);if(!raw)return '';
+    const n=Number(raw.replace(/,/g,''));
+    return Number.isFinite(n)&&n>=0&&n<=100000?n:'';
+  }
+  function timeWindow(from,to){
+    const a=normalizeTime(from),b=normalizeTime(to);if(!a&&!b)return {from:'',to:'',valid:true};
+    if(!a||!b)return {from:a,to:b,valid:false};
+    return {from:a,to:b,valid:a<b};
+  }
+  function levenshtein(a,b){
+    a=norm(a);b=norm(b);if(a===b)return 0;if(!a)return b.length;if(!b)return a.length;
+    const prev=Array.from({length:b.length+1},(_,i)=>i),cur=new Array(b.length+1);
+    for(let i=1;i<=a.length;i++){cur[0]=i;for(let j=1;j<=b.length;j++)cur[j]=Math.min(cur[j-1]+1,prev[j]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));for(let j=0;j<=b.length;j++)prev[j]=cur[j];}
+    return prev[b.length];
+  }
+  function nameSimilarity(a,b){const x=norm(a),y=norm(b),m=Math.max(x.length,y.length);return m?1-levenshtein(x,y)/m:1;}
+  function probableDoctorMatch(rec){
+    const place=norm(rec.area||rec.hq),hospital=norm(rec.hospital);
+    let best=null,bestScore=0;
+    for(const d of state.doctors){
+      const sameContext=(hospital&&norm(doctorHospital(d))===hospital)||(place&&norm(inferDoctorArea(d)||d.hq)===place);
+      if(!sameContext)continue;const score=nameSimilarity(rec.name,d.name);if(score>bestScore){best=d;bestScore=score;}
+    }
+    return best&&bestScore>=.86?{record:best,score:bestScore}:null;
+  }
 
   function upsertChemist(rec){
     const incoming={...(rec||{})};
@@ -2369,8 +2476,10 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
   function upsertDoctor(rec){
     const incoming={...(rec||{})};incoming.area=inferDoctorArea(incoming)||clean(incoming.area||incoming.hq);
     const key=norm(incoming.name),hospital=norm(incoming.hospital),place=norm(incoming.area||incoming.hq);let old=state.doctors.find(x=>norm(x.name)===key&&hospital&&norm(doctorHospital(x))===hospital);if(!old&&hospital)old=state.doctors.find(x=>norm(x.name)===key&&!doctorHospital(x)&&(!place||norm(inferDoctorArea(x)||x.hq)===place));if(!old&&!hospital)old=state.doctors.find(x=>norm(x.name)===key&&(!place||norm(inferDoctorArea(x)||x.hq)===place))||state.doctors.find(x=>norm(x.name)===key&&!doctorHospital(x));
-    if(!old){const created={...incoming,id:uid('dr'),createdAt:new Date().toISOString()};created.area=inferDoctorArea(created)||created.area||created.hq;state.doctors.push(created);return {mode:'added',record:created};}
-    const protectedFields=['notes','lastVisit','nextFollowUp','createdAt','id','latitude','longitude','locationCapturedAt'];Object.entries(incoming).forEach(([k,v])=>{if(protectedFields.includes(k)||v===''||v==null)return;if(Array.isArray(v))old[k]=mergeArrays(old[k],v);else old[k]=v;});old.area=inferDoctorArea(old)||old.area||old.hq;old.sourceFiles=mergeArrays(old.sourceFiles,incoming.sourceFiles);old.updatedAt=new Date().toISOString();return {mode:'updated',record:old};
+    const probable=!old?probableDoctorMatch(incoming):null;
+    if(!old&&probable?.score>=.94)old=probable.record;
+    if(!old){const created={...incoming,id:uid('dr'),createdAt:new Date().toISOString()};created.area=inferDoctorArea(created)||created.area||created.hq;state.doctors.push(created);return {mode:'added',record:created,possibleDuplicate:probable?.record||null,similarity:probable?.score||0};}
+    const protectedFields=['notes','lastVisit','nextFollowUp','createdAt','id','latitude','longitude','locationCapturedAt'];Object.entries(incoming).forEach(([k,v])=>{if(protectedFields.includes(k)||v===''||v==null)return;if(Array.isArray(v))old[k]=mergeArrays(old[k],v);else old[k]=v;});old.area=inferDoctorArea(old)||old.area||old.hq;old.sourceFiles=mergeArrays(old.sourceFiles,incoming.sourceFiles);old.updatedAt=new Date().toISOString();return {mode:'updated',record:old,similarity:probable?.score||1};
   }
   function upsertDistributor(rec){
     const key=norm(rec.name),place=norm(rec.area||rec.hq);let old=state.distributors.find(x=>norm(x.name)===key&&(!place||norm(x.area||x.hq)===place))||state.distributors.find(x=>norm(x.name)===key);
@@ -2380,25 +2489,32 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
   function upsertProduct(name,pts=''){if(!validName(name))return false;const key=norm(name);let p=state.products.find(x=>norm(x.name)===key);if(!p){state.products.push({id:uid('p'),name:clean(name),pts:num(pts)||'',createdAt:new Date().toISOString()});return true;}if(pts)p.pts=num(pts)||p.pts;return false;}
 
   function importSheetRows(sheets,fileName){
-    const result={doctorAdded:0,doctorUpdated:0,chemistAdded:0,chemistUpdated:0,distributorAdded:0,distributorUpdated:0,products:0,linked:0,skipped:0,sheets:0};
+    const result={doctorAdded:0,doctorUpdated:0,chemistAdded:0,chemistUpdated:0,distributorAdded:0,distributorUpdated:0,products:0,linked:0,skipped:0,sheets:0,issues:[]};
+    const issue=(sheet,row,reason)=>{result.issues.push(`${sheet}${row?` row ${row}`:''}: ${reason}`);};
     (sheets||[]).forEach(sheet=>{
       const sheetName=clean(sheet.name)||'Sheet';
-      const rows=Array.isArray(sheet.rows)?sheet.rows:[];const hi=findHeaderRow(rows);if(hi<0)return;
+      const rows=Array.isArray(sheet.rows)?sheet.rows:[];const hi=findHeaderRow(rows);if(hi<0){result.skipped++;issue(sheetName,0,'sheet skipped — no recognized header');return;}
       const headers=rows[hi].map(clean),hasDoc=indexFor(headers,'doctorName')>=0,hasChem=indexFor(headers,'chemistName')>=0,hasDist=indexFor(headers,'distributorName')>=0,hasProd=indexFor(headers,'product')>=0;result.sheets++;
-      rows.slice(hi+1).forEach(row=>{
+      const recognized=headers.filter(h=>Object.keys(HEADER_GROUPS).some(g=>hasHeader(h,g))).length;
+      if(!recognized)issue(sheetName,hi+1,'no mapped columns');
+      rows.slice(hi+1).forEach((row,rowIndex)=>{
+        const sheetRow=hi+2+rowIndex;
+        const rawMobile=rowVal(row,headers,'mobile'),mobile=normalizedMobile(rawMobile);if(rawMobile&&!mobile)issue(sheetName,sheetRow,`invalid mobile ignored: ${rawMobile}`);
+        const area=rowVal(row,headers,'area'),city=rowVal(row,headers,'city');
         const distName=hasDist?rowVal(row,headers,'distributorName'):'';let distributor=null;
-        if(validName(distName)){const rr=upsertDistributor({name:distName,hq:rowVal(row,headers,'hq')||state.profile.hq,area:rowVal(row,headers,'area'),address:rowVal(row,headers,'address'),mobile:rowVal(row,headers,'mobile'),sourceFiles:[fileName]});distributor=rr.record;result[rr.mode==='added'?'distributorAdded':'distributorUpdated']++;}
+        if(validName(distName)){const rr=upsertDistributor({name:distName,hq:rowVal(row,headers,'hq')||state.profile.hq,area,city,address:rowVal(row,headers,'address'),mobile,sourceFiles:[fileName]});distributor=rr.record;result[rr.mode==='added'?'distributorAdded':'distributorUpdated']++;}
         const chemName=hasChem?rowVal(row,headers,'chemistName'):'';let chem=null;
         if(validName(chemName)){
-          const cr=upsertChemist({name:chemName,hq:rowVal(row,headers,'hq')||state.profile.hq,area:rowVal(row,headers,'area'),address:rowVal(row,headers,'address'),linkedDistributorId:distributor?.id||'',distributorName:distributor?.name||'',products:[],sourceFiles:[fileName],tags:[sheetName]});chem=cr.record;result[cr.mode==='added'?'chemistAdded':'chemistUpdated']++;
+          const cr=upsertChemist({name:chemName,hq:rowVal(row,headers,'hq')||state.profile.hq,area,city,address:rowVal(row,headers,'address'),mobile,linkedDistributorId:distributor?.id||'',distributorName:distributor?.name||'',products:[],sourceFiles:[fileName],tags:[sheetName]});chem=cr.record;result[cr.mode==='added'?'chemistAdded':'chemistUpdated']++;
         }
         if(hasDoc){
           const name=rowVal(row,headers,'doctorName');if(validName(name)){
-            const dr=upsertDoctor({name,hospital:rowVal(row,headers,'hospital'),hq:rowVal(row,headers,'hq')||state.profile.hq,area:rowVal(row,headers,'area'),address:rowVal(row,headers,'address'),meetingDays:normalizeMeetingDays(rowVal(row,headers,'meetingDays')),meetingFrom:normalizeTime(rowVal(row,headers,'meetingFrom')),meetingTo:normalizeTime(rowVal(row,headers,'meetingTo')),campaign:rowVal(row,headers,'campaign')||sheetName,linkedChemistId:chem?.id||'',chemistName:chem?.name||'',sourceFiles:[fileName],tags:[sheetName]});
-            result[dr.mode==='added'?'doctorAdded':'doctorUpdated']++;if(chem){dr.record.linkedChemistId=chem.id;dr.record.chemistName=chem.name;result.linked++;}
-          }else if(!chem&&!distributor)result.skipped++;
-        }else if(!chem&&!distributor&&!hasProd)result.skipped++;
-        if(hasProd){const product=rowVal(row,headers,'product');if(upsertProduct(product,rowVal(row,headers,'pts')))result.products++;}
+            const w=timeWindow(rowVal(row,headers,'meetingFrom'),rowVal(row,headers,'meetingTo'));if(!w.valid)issue(sheetName,sheetRow,'meeting time ignored — From must be earlier than To');
+            const dr=upsertDoctor({name,hospital:rowVal(row,headers,'hospital'),hq:rowVal(row,headers,'hq')||state.profile.hq,area,city,address:rowVal(row,headers,'address'),mobile,speciality:rowVal(row,headers,'speciality'),coreCategory:rowVal(row,headers,'coreCategory'),potentialUnits:num(rowVal(row,headers,'potentialUnits'))||'',inputGivenDate:dateOnly(rowVal(row,headers,'inputGivenDate')),dmLastVisit:dateOnly(rowVal(row,headers,'dmLastVisit')),rmLastVisit:dateOnly(rowVal(row,headers,'rmLastVisit')),meetingDays:normalizeMeetingDays(rowVal(row,headers,'meetingDays')),meetingFrom:w.valid?w.from:'',meetingTo:w.valid?w.to:'',campaign:rowVal(row,headers,'campaign')||sheetName,linkedChemistId:chem?.id||'',chemistName:chem?.name||'',sourceFiles:[fileName],tags:[sheetName]});
+            result[dr.mode==='added'?'doctorAdded':'doctorUpdated']++;if(dr.possibleDuplicate)issue(sheetName,sheetRow,`possible duplicate: ${name} ↔ ${dr.possibleDuplicate.name} (${Math.round(dr.similarity*100)}% similar)`);if(chem){dr.record.linkedChemistId=chem.id;dr.record.chemistName=chem.name;result.linked++;}
+          }else if(!chem&&!distributor){result.skipped++;issue(sheetName,sheetRow,'row skipped — doctor name is blank/invalid');}
+        }else if(!chem&&!distributor&&!hasProd){result.skipped++;issue(sheetName,sheetRow,'row skipped — no recognized doctor/chemist/distributor/product value');}
+        if(hasProd){const product=rowVal(row,headers,'product'),rawPts=rowVal(row,headers,'pts'),pts=safePts(rawPts);if(rawPts&&pts==='')issue(sheetName,sheetRow,`invalid PTS ignored: ${rawPts}`);if(upsertProduct(product,pts))result.products++;}
       });
     });return result;
   }
@@ -2410,13 +2526,13 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
     const raw=window.AndroidBridge.parseSpreadsheet(file.name,bufferToBase64(await file.arrayBuffer()));
     const parsed=JSON.parse(raw);if(parsed.error)throw new Error(parsed.error);return importSheetRows(parsed.sheets,file.name);
   }
-  const resultSummary=r=>`${r.doctorAdded} doctors added, ${r.doctorUpdated} updated; ${r.chemistAdded} chemists added, ${r.chemistUpdated} updated; ${r.distributorAdded||0} distributors added, ${r.distributorUpdated||0} updated; ${r.linked||0} doctor-chemist links; ${r.products} products.`;
+  const resultSummary=r=>`${r.doctorAdded} doctors added, ${r.doctorUpdated} updated; ${r.chemistAdded} chemists added, ${r.chemistUpdated} updated; ${r.distributorAdded||0} distributors added, ${r.distributorUpdated||0} updated; ${r.linked||0} doctor-chemist links; ${r.products} products; ${r.skipped||0} skipped${r.issues?.length?`; ${r.issues.length} warning(s)`:''}.`;
   async function importFiles(files){
     const status=$('#importStatus');status.className='notice';status.classList.remove('hidden');status.textContent='Importing and merging records…';let grand={doctorAdded:0,doctorUpdated:0,chemistAdded:0,chemistUpdated:0,distributorAdded:0,distributorUpdated:0,products:0,linked:0,skipped:0,sheets:0};
-    try{for(const file of files){if(file.name.toLowerCase().endsWith('.json')){restoreObject(JSON.parse(await file.text()));continue;}const r=window.AndroidBridge?.parseSpreadsheet?await importThroughAndroid(file):await importArrayBuffer(await file.arrayBuffer(),file.name);Object.keys(grand).forEach(k=>grand[k]+=num(r[k]));state.imports.push({id:uid('imp'),file:file.name,date:new Date().toISOString(),summary:resultSummary(r)});}saveState();status.textContent=`Done: ${resultSummary(grand)} Old meetings and saved GPS were preserved.`;toast('Import complete.');}catch(err){status.className='notice error';status.textContent=`Import failed: ${err.message}`;}
+    try{for(const file of files){if(file.name.toLowerCase().endsWith('.json')){restoreObject(JSON.parse(await file.text()));continue;}const r=window.AndroidBridge?.parseSpreadsheet?await importThroughAndroid(file):await importArrayBuffer(await file.arrayBuffer(),file.name);Object.keys(grand).forEach(k=>grand[k]+=num(r[k]));state.imports.push({id:uid('imp'),file:file.name,date:new Date().toISOString(),summary:resultSummary(r),issues:(r.issues||[]).slice(0,50)});}saveState();status.textContent=`Done: ${resultSummary(grand)} Old meetings and saved GPS were preserved.`;toast('Import complete.');}catch(err){status.className='notice error';status.textContent=`Import failed: ${err.message}`;}
   }
   function loadEmbeddedSeed(){if(state.settings.embeddedSeedLoaded||!window.MR_SEED_DATA)return;const seed=window.MR_SEED_DATA;let da=0,du=0,ca=0,cu=0,pc=0;(seed.chemists||[]).forEach(r=>{const m=upsertChemist(r);m.mode==='added'?ca++:cu++;});(seed.doctors||[]).forEach(r=>{const m=upsertDoctor(r);m.mode==='added'?da++:du++;});(seed.products||[]).forEach(r=>{if(upsertProduct(r.name,r.pts))pc++;});state.settings.embeddedSeedLoaded=true;state.imports.push({id:uid('imp'),file:'Embedded supplied data',date:new Date().toISOString(),summary:`${da} doctors, ${ca} chemists/stockists and ${pc} products loaded.`});saveState(false);}
-  async function loadBundledFiles(auto=false){const status=$('#importStatus');status.className='notice';status.classList.remove('hidden');status.textContent='Loading supplied Excel files…';if(!window.XLSX){status.className='notice error';status.textContent='Excel engine unavailable. Reopen the app.';return;}let total={doctorAdded:0,doctorUpdated:0,chemistAdded:0,chemistUpdated:0,distributorAdded:0,distributorUpdated:0,products:0,linked:0,skipped:0,sheets:0},ok=0;for(const path of BUNDLED_FILES){try{const res=await fetch(path);if(!res.ok)throw new Error(String(res.status));const r=await importArrayBuffer(await res.arrayBuffer(),decodeURIComponent(path.split('/').pop()));Object.keys(total).forEach(k=>total[k]+=num(r[k]));ok++;}catch(e){console.warn('Bundled import skipped',path,e);}}state.settings.bundledImportAttempted=true;if(ok){state.imports.push({id:uid('imp'),file:`${ok} supplied files`,date:new Date().toISOString(),summary:resultSummary(total)});saveState();status.textContent=`Supplied files loaded: ${resultSummary(total)}`;if(!auto)toast('Supplied data loaded.');}else{saveState(false);status.className='notice error';status.textContent='Could not read bundled files. Start through the included Termux server.';}}
+  async function loadBundledFiles(auto=false){const status=$('#importStatus');status.className='notice';status.classList.remove('hidden');status.textContent='Loading supplied Excel files…';if(!window.XLSX){status.className='notice error';status.textContent='Excel engine unavailable. Reopen the app.';return;}let total={doctorAdded:0,doctorUpdated:0,chemistAdded:0,chemistUpdated:0,distributorAdded:0,distributorUpdated:0,products:0,linked:0,skipped:0,sheets:0},ok=0;for(const path of BUNDLED_FILES){try{const res=await fetch(path);if(!res.ok)throw new Error(String(res.status));const r=await importArrayBuffer(await res.arrayBuffer(),decodeURIComponent(path.split('/').pop()));Object.keys(total).forEach(k=>total[k]+=num(r[k]));ok++;}catch(e){console.warn('Bundled import skipped',path,e);}}state.settings.bundledImportAttempted=true;if(ok){state.imports.push({id:uid('imp'),file:`${ok} supplied files`,date:new Date().toISOString(),summary:resultSummary(total),issues:(total.issues||[]).slice(0,50)});saveState();status.textContent=`Supplied files loaded: ${resultSummary(total)}`;if(!auto)toast('Supplied data loaded.');}else{saveState(false);status.className='notice error';status.textContent='Could not read bundled files. Start through the included Termux server.';}}
 
   function haptic(kind='selection'){try{if(state?.settings?.haptics===false)return;if(window.AndroidBridge?.haptic)window.AndroidBridge.haptic(kind);}catch(_){}}
 
@@ -2506,6 +2622,8 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
         if(action==='area-time-plan')areaTimeDoctorPlan();
         if(action==='edit-tour-plan')editTourPlan(id);
         if(action==='manage-sales')manageSales();
+        if(action==='add-weekly-business')addWeeklyBusiness();
+        if(action==='export-weekly-data')exportTmWeeklyData();
         if(action==='app-update')manageAppUpdate();
         if(action==='edit-sales')editSales();
         if(action==='add-doctor')editRecord('doctor');if(action==='add-chemist')editRecord('chemist');
@@ -2523,7 +2641,7 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
     $('#doctorRouteSelectBtn').addEventListener('click',toggleDoctorRouteMode);
     $('#stockFilterBtn').addEventListener('click',()=>{chemistFilter=chemistFilter==='feedback'?'all':'feedback';renderChemists();});
     $('#workflowModeBtn').addEventListener('click',()=>{state.settings.workflowMode=state.settings.workflowMode==='collect'?'field':'collect';saveState();toast(state.settings.workflowMode==='collect'?'Data gathering mode active.':'Field work mode active.');});
-    $('#machineOpenBtn').addEventListener('click',openIntelligenceCenter);$('#companyReportPackBtn').addEventListener('click',exportCompanyReportPack);$('#sanOverlayBtn').addEventListener('click',openSanOverlayManager);
+    $('#machineOpenBtn').addEventListener('click',openIntelligenceCenter);$('#companyReportPackBtn').addEventListener('click',exportCompanyReportPack);$('#weeklyDataBtn').addEventListener('click',openWeeklyDataCenter);$('#sanOverlayBtn').addEventListener('click',openSanOverlayManager);
     $('#nearbyHospitalBtn').addEventListener('click',discoverNearbyHospitals);$('#planRouteBtn').addEventListener('click',startDoctorRouteSelection);$('#newOrderBtn').addEventListener('click',()=>quickOrder());$('#manageDistributorsBtn').addEventListener('click',manageDistributors);$('#manageSchemesBtn').addEventListener('click',manageSchemes);$('#exportXlsxBtn').addEventListener('click',exportXLSX);
     $('#copyReportBtn').addEventListener('click',async()=>{try{const text=getReportText();if(window.AndroidBridge?.copyText)window.AndroidBridge.copyText(text);else await navigator.clipboard.writeText(text);toast('Daily report copied.');}catch(_){toast('Copy failed. Use Share.');}});
     $('#shareReportBtn').addEventListener('click',async()=>{const text=getReportText();try{if(window.AndroidBridge?.shareText)window.AndroidBridge.shareText('MR Daily Report',text);else if(navigator.share)await navigator.share({title:'MR Daily Report',text});else window.open(`https://wa.me/?text=${encodeURIComponent(text)}`,'_blank');}catch(e){if(e.name!=='AbortError')toast('Share cancelled.');}});
@@ -2541,6 +2659,22 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
     window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstallPrompt=e;});window.matchMedia?.('(prefers-color-scheme: dark)')?.addEventListener?.('change',()=>{if((state.settings.theme||'system')==='system')applyTheme();});
   }
 
-  async function init(){loadEmbeddedSeed();applyTheme();bindEvents();renderAll();showLockIfNeeded();if(window.AndroidBridge?.consumeSanOverlayText){const pending=clean(window.AndroidBridge.consumeSanOverlayText());if(pending)setTimeout(()=>openSanClipboardReview(pending),500);}if(window.AndroidBridge?.fetchLocation)setTimeout(requestProximityCheck,700);if('serviceWorker'in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./service-worker.js').catch(console.warn);if(!state.settings.bundledImportAttempted&&location.protocol!=='file:')setTimeout(()=>loadBundledFiles(true),900);}
+  function showBootFailure(error){
+    console.error('MR One boot failure',error);document.documentElement.dataset.boot='failed';
+    const app=$('#app');if(app)app.insertAdjacentHTML('afterbegin',`<div class="boot-failure" role="alert"><strong>MR One could not finish loading.</strong><span>Your saved data was not deleted.</span><button type="button" onclick="location.reload()">Retry</button></div>`);
+  }
+  async function init(){
+    document.documentElement.dataset.boot='starting';
+    try{
+      applyTheme();bindEvents();renderAll();showLockIfNeeded();document.documentElement.dataset.boot='ready';
+      const idle=window.requestIdleCallback||((fn)=>setTimeout(fn,80));idle(()=>{try{loadEmbeddedSeed();}catch(e){console.warn('Seed load deferred failure',e);}}, {timeout:700});
+      if(window.AndroidBridge?.consumeSanOverlayText){const pending=clean(window.AndroidBridge.consumeSanOverlayText());if(pending)setTimeout(()=>openSanClipboardReview(pending),450);}
+      if(window.AndroidBridge?.fetchLocation)setTimeout(requestProximityCheck,650);
+      if('serviceWorker'in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./service-worker.js').catch(console.warn);
+      if(!state.settings.bundledImportAttempted&&location.protocol!=='file:')setTimeout(()=>loadBundledFiles(true),1100);
+    }catch(error){showBootFailure(error);}
+  }
+  window.addEventListener('error',e=>console.error('MR One runtime error',e.error||e.message));
+  window.addEventListener('unhandledrejection',e=>console.error('MR One promise rejection',e.reason));
   document.addEventListener('DOMContentLoaded',init);
 })();

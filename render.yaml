@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: mr-one
+    runtime: static
+    buildCommand: echo "MR One static assets ready"
+    staticPublishPath: ./app/src/main/assets/web
+    autoDeployTrigger: checksPass

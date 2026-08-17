@@ -17,8 +17,8 @@
       <div class="brand-mark large">MR</div>
       <h1>MR One</h1>
       <p>Enter your local app PIN</p>
-      <input id="unlockPin" class="pin-input" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="••••" />
-      <button id="unlockBtn" class="btn primary full">Unlock</button>
+      <input id="unlockPin" class="pin-input" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="••••" aria-label="App PIN" />
+      <button id="unlockBtn" class="btn primary full" type="button">Unlock</button>
       <p id="unlockError" class="error-text"></p>
     </div>
   </div>
@@ -173,7 +173,7 @@
           <label class="btn primary compact file-btn">Choose files<input id="importFile" type="file" accept=".xlsx,.xls,.csv,.json" multiple /></label>
         </div>
         <button id="loadBundledBtn" class="btn secondary full">Load the supplied Excel files</button>
-        <div id="importStatus" class="notice hidden"></div>
+        <div id="importStatus" class="notice hidden" role="status" aria-live="polite"></div>
         <div id="importHistory" class="import-history"></div>
 
         <div class="settings-card-grid">
@@ -181,6 +181,7 @@
           <button class="settings-card action-card" id="exportCsvBtn"><span>▦</span><div><h3>Export CSV</h3><p>Doctor, chemist and linked master</p></div></button>
           <button class="settings-card action-card" id="exportXlsxBtn"><span>XL</span><div><h3>Export full XLSX</h3><p>Doctors, visits, RCPA, sales, orders, GPS and route</p></div></button>
           <button class="settings-card action-card featured-report" id="companyReportPackBtn"><span>4X</span><div><h3>Generate 4 company files</h3><p>Lost Prescriber, MY Z & NICU, Kunjan Compilation and GUJ Sales</p></div></button>
+          <button class="settings-card action-card weekly-data-card" id="weeklyDataBtn"><span>WK</span><div><h3>TM Weekly Data</h3><p>Coverage, patch, inputs, product business, missed & lost Rxber</p></div></button>
           <button class="settings-card action-card" id="restoreBtn"><span>⇧</span><div><h3>Restore backup</h3><p>Import MR One full backup</p></div></button>
           <input id="restoreInput" type="file" accept=".json" hidden />
         </div>
@@ -224,18 +225,18 @@
     </main>
 
     <nav class="bottom-nav" aria-label="Primary">
-      <button class="active" data-nav="dashboard"><span>⌂</span><small>Home</small></button>
-      <button data-nav="doctors"><span>⚕</span><small>Doctors</small></button>
-      <button data-nav="chemists"><span>✚</span><small>Chemists</small></button>
-      <button data-nav="visits"><span>✓</span><small>Activity</small></button>
-      <button data-nav="tools"><span>⚙</span><small>Tools</small></button>
+      <button class="active" data-nav="dashboard" aria-label="Home"><span aria-hidden="true">⌂</span><small>Home</small></button>
+      <button data-nav="doctors" aria-label="Doctors"><span aria-hidden="true">⚕</span><small>Doctors</small></button>
+      <button data-nav="chemists" aria-label="Chemists"><span aria-hidden="true">✚</span><small>Chemists</small></button>
+      <button data-nav="visits" aria-label="Activity"><span aria-hidden="true">✓</span><small>Activity</small></button>
+      <button data-nav="tools" aria-label="Tools"><span aria-hidden="true">⚙</span><small>Tools</small></button>
     </nav>
   </div>
 
   <div id="sheetBackdrop" class="sheet-backdrop hidden"></div>
   <aside id="editorSheet" class="bottom-sheet hidden" aria-modal="true" role="dialog">
     <div class="sheet-handle"></div>
-    <div class="sheet-head"><div><h2 id="sheetTitle">Add</h2><p id="sheetSubtitle"></p></div><button class="icon-btn" data-close-sheet>×</button></div>
+    <div class="sheet-head"><div><h2 id="sheetTitle">Add</h2><p id="sheetSubtitle"></p></div><button class="icon-btn" data-close-sheet aria-label="Close dialog">×</button></div>
     <div id="sheetBody" class="sheet-body"></div>
   </aside>
   <div id="toast" class="toast hidden" role="status"></div>
