@@ -147,20 +147,31 @@
       <section class="page" data-page="tools">
         <div class="page-title-row"><div><h1>Tools</h1><p>Only the field tools you actually use</p></div></div>
 
-        <details class="tool-group" open><summary class="collapse-summary"><div><span class="eyebrow dark-eye">FIELD WORK</span><h2>Daily tools</h2><p>Doctor work, market feedback, routing and updates</p></div><span class="summary-meta"><b>⌄</b></span></summary>
+        <button type="button" class="admin-banner" data-nav="admin"><div><span class="eyebrow">SUPER ADMIN</span><h2>Feature control, filters &amp; backups</h2><p>Turn features on/off, manage doctor filters, set CORE/NON-CORE visit frequency, and restore backups.</p></div><span class="admin-banner-arrow">→</span></button>
 
+        <details class="tool-group" open><summary class="collapse-summary"><div><span class="eyebrow dark-eye">PLANNING & SCHEDULING</span><h2>Plan the day, week and month</h2><p>Appointments, smart plans and advance planning</p></div><span class="summary-meta"><b>⌄</b></span></summary>
         <div class="settings-card-grid business-tools practical-tools">
           <button class="settings-card action-card practical" data-action="manage-appointments"><span>AP</span><div><h3>Appointments</h3><p>Get / confirm doctor appointment + Smart Plan lock</p></div></button>
           <button class="settings-card action-card practical" data-action="quick-complete-doctor"><span>QD</span><div><h3>Quick Doctor Details</h3><p>Fast search, frequency, timing and automatic nearby GPS</p></div></button>
           <button class="settings-card action-card practical" data-action="area-time-plan"><span>AT</span><div><h3>Smart Monthly Doctor Plan</h3><p>Area + time + visit frequency + nearest route</p></div></button>
           <button class="settings-card action-card practical" data-feature="advancePlanning" data-action="advance-planning"><span>30D</span><div><h3>Advance Planning</h3><p>Date-wise auto patch + automatic daily plan + next 30 days</p></div></button>
+          <button class="settings-card action-card" data-feature="route" data-action="plan-route"><span>⌖</span><div><h3>Doctor route</h3><p>Filter → manually select doctors → build Google Maps route</p></div></button>
+          <button class="settings-card action-card" data-feature="nearby" data-action="nearby-hospitals"><span>◎</span><div><h3>Nearby hospital discovery</h3><p>GPS → hospital → doctor → Google verify</p></div></button>
+        </div>
+        </details>
+
+        <details class="tool-group"><summary class="collapse-summary"><div><span class="eyebrow dark-eye">MARKET & BUSINESS</span><h2>RCPA, sales and orders</h2><p>Competition tracking, targets, distributors and offers</p></div><span class="summary-meta"><b>⌄</b></span></summary>
+        <div class="settings-card-grid business-tools practical-tools">
           <button class="settings-card action-card practical" data-feature="rcpa" data-action="manage-rcpa"><span>R</span><div><h3>RCPA / Competition</h3><p id="rcpaToolText">Chemist prescription audit</p></div></button>
           <button class="settings-card action-card practical" data-feature="sales" data-action="manage-sales"><span>↗</span><div><h3>Target & Sales</h3><p id="salesToolText">Monthly target vs achievement</p></div></button>
           <button class="settings-card action-card" data-feature="distributors" id="manageDistributorsBtn"><span>DS</span><div><h3>Distributor setup</h3><p id="distributorCountText">0 distributors</p></div></button>
           <button class="settings-card action-card" data-feature="schemes" id="manageSchemesBtn"><span>%</span><div><h3>Date-wise offers</h3><p id="schemeCountText">0 active schemes</p></div></button>
-          <button class="settings-card action-card" data-feature="nearby" data-action="nearby-hospitals"><span>◎</span><div><h3>Nearby hospital discovery</h3><p>GPS → hospital → doctor → Google verify</p></div></button>
-          <button class="settings-card action-card" data-feature="route" data-action="plan-route"><span>⌖</span><div><h3>Doctor route</h3><p>Filter → manually select doctors → build Google Maps route</p></div></button>
           <button class="settings-card action-card" data-feature="orders" data-action="new-order"><span>₹</span><div><h3>New POB order</h3><p>Chemist → distributor → products</p></div></button>
+        </div>
+        </details>
+
+        <details class="tool-group"><summary class="collapse-summary"><div><span class="eyebrow dark-eye">FIELD UTILITIES</span><h2>Overlay & updates</h2><p>SAN capture overlay and app updates</p></div><span class="summary-meta"><b>⌄</b></span></summary>
+        <div class="settings-card-grid business-tools practical-tools">
           <button class="settings-card action-card san-overlay-card" data-feature="sanOverlay" id="sanOverlayBtn"><span>CP</span><div><h3>SAN copy overlay</h3><p>Copy in SAN → floating paste box → review in MR</p></div></button>
           <button class="settings-card action-card" data-feature="appUpdate" data-action="app-update"><span>↑</span><div><h3>App update</h3><p id="appUpdateToolText">One-tap check, download and install</p></div></button>
         </div>

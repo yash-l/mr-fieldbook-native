@@ -366,3 +366,10 @@ input[type="checkbox"]{accent-color:var(--brand)}
 :root[data-theme="dark"] .avatar,:root[data-theme="black"] .avatar{color:var(--brand2)}
 .core-badge.core{position:relative}
 .machine-patch-row>span{background:var(--goldsoft);color:var(--gold)}
+
+/* ===================== v23: Tools reorg + Super Admin banner ===================== */
+.admin-banner{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;text-align:left;border:0;border-radius:22px;padding:17px 18px;margin:0 0 16px;background:var(--premium-accent);color:#fff;box-shadow:0 14px 34px rgba(61,33,201,.28)}
+.admin-banner .eyebrow{color:#f0d9a1}
+.admin-banner h2{margin:5px 0 3px;font-size:16px;letter-spacing:-.01em}
+.admin-banner p{margin:0;font-size:11px;color:rgba(255,255,255,.82);line-height:1.4;max-width:280px}
+.admin-banner-arrow{font-size:22px;flex:0 0 auto}
