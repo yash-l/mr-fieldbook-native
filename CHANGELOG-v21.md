@@ -1,5 +1,19 @@
 # v21 — CORE/NON-CORE, Advance Planning, Doctor/Pharmacy Records, Super Admin, Data Safety
 
+## v22 follow-up fix
+- **CORE/NON-CORE was cosmetic before this fix.** `doctorVisitPolicy()` was reading only
+  `doctor.monthlyVisitTarget` and ignoring `coreCategory` entirely, so the filter chip
+  changed nothing about scheduling. Now: CORE doctors default to **3× / month** (configurable
+  to 2×) and NON-CORE default to **1× / month**, via `state.settings.coreMonthlyTarget` /
+  `nonCoreMonthlyTarget` — editable from Super Admin → Visit frequency policy. This feeds
+  directly into eligibility checks, the dashboard, and the 30-day advance planner, so CORE
+  doctors are now actually scheduled 2–3× more often than NON-CORE. A doctor's own manual
+  `monthlyVisitTarget` (if set on their profile) still overrides the default.
+- **Palette changed** from the original teal to a violet (#5b3df5) + gold (#c8922a) premium
+  scheme, applied via CSS variables so it's consistent across light, dark, and OLED themes.
+  CORE badge/chip now use the gold accent specifically, to read as a distinct priority tier
+  from the app's own brand color.
+
 All changes are additive to `app/src/main/assets/web/{app.js,styles.css,index.html}`.
 No existing doctor, chemist, visit, or settings data is touched, renamed, or removed.
 A full pre-edit copy of the app is kept outside this repo before any change was made.

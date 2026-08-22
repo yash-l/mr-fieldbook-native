@@ -248,10 +248,14 @@
     return rows;
   }
   function doctorVisitPolicy(doctor){
-    const target=Math.max(1,Math.min(4,Math.round(num(doctor?.monthlyVisitTarget)||2)));
+    const core=String(doctor?.coreCategory||'').toUpperCase();
+    const coreDefault=Math.max(1,Math.min(4,Math.round(num(state?.settings?.coreMonthlyTarget)||3)));
+    const nonCoreDefault=Math.max(1,Math.min(4,Math.round(num(state?.settings?.nonCoreMonthlyTarget)||1)));
+    const autoDefault=core==='C'?coreDefault:core==='NC'?nonCoreDefault:2;
+    const target=Math.max(1,Math.min(4,Math.round(num(doctor?.monthlyVisitTarget)||autoDefault)));
     const automaticGap=target===1?0:target===2?15:target===3?9:7;
     const gap=Math.max(0,Math.round(num(doctor?.minVisitGapDays)||automaticGap));
-    return {target,gap,label:`${target}× / month${gap?` • ${gap}d gap`:''}`};
+    return {target,gap,core,label:`${target}× / month${gap?` • ${gap}d gap`:''}${core==='C'?' • CORE':core==='NC'?' • NON-CORE':''}`};
   }
   function doctorEligibilityForDate(doctor,date=localISODate()){
     const policy=doctorVisitPolicy(doctor),month=monthKey(date),allRows=effectiveSuccessfulDoctorVisits(doctor),rows=allRows.filter(v=>monthKey(v.date)===month),count=rows.length,last=allRows.slice(-1)[0]||null;
@@ -375,7 +379,7 @@ function defaultSchemes() {
       weeklyBusiness: [],
       opening: {monthKey: monthKey(today), calls:0, inputs:0, basket:0, towel:0, conversation:0, newAvailability:0, pobValue:0},
       imports: [],
-      settings: {bundledImportAttempted:false, embeddedSeedLoaded:false, pinHash:'', installedHintSeen:false, workflowMode:'field', nearbyRadiusMeters:1000, expenseRatePerKm:0, theme:'system', haptics:true, dailyPlanCap:8},
+      settings: {bundledImportAttempted:false, embeddedSeedLoaded:false, pinHash:'', installedHintSeen:false, workflowMode:'field', nearbyRadiusMeters:1000, expenseRatePerKm:0, theme:'system', haptics:true, dailyPlanCap:8, coreMonthlyTarget:3, nonCoreMonthlyTarget:1},
       doctorNotes: [],
       doctorPrescriptions: [],
       pharmacyProducts: [],
@@ -2931,6 +2935,8 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
     const backupsHtml=backups.length?backups.map((b,i)=>{const check=verifyBackup(b);return `<div class="import-item"><div><strong>${esc(b.kind)} • ${esc(new Date(b.ts).toLocaleString('en-IN'))}</strong><small>${esc(humanBytes(b.sizeBytes))} • ${check.ok?'✓ verified':'⚠ '+esc(check.reason)}</small></div><button data-restore-backup="${i}" class="tag" style="border:0;cursor:pointer">Restore</button></div>`;}).join(''):empty('No snapshots yet — one is taken automatically each day and before risky operations (import, migration, reset).');
     return `
     <div class="form-card"><div class="form-title"><h2>RBAC status</h2><p>Unlocked for this session only; locks again on app restart or when you tap Lock. This is a local offline app — the PIN gates the controls below in-app; it is not a server-enforced permission boundary.</p></div><button id="adminLockBtn" class="btn secondary">Lock now</button></div>
+    <div class="form-card"><div class="form-title"><h2>Visit frequency policy</h2><p>CORE doctors are auto-scheduled more often than NON-CORE across every planning tool. Applies to any doctor without a manual override on their profile.</p></div>
+    <form id="visitPolicyForm" class="sheet-form"><div class="field-grid two"><label><span>CORE — meetings / month</span><select name="coreMonthlyTarget"><option value="2" ${num(state.settings.coreMonthlyTarget)===2?'selected':''}>Twice (2×)</option><option value="3" ${num(state.settings.coreMonthlyTarget)!==2?'selected':''}>Thrice (3×)</option></select></label><label><span>NON-CORE — meetings / month</span><select name="nonCoreMonthlyTarget"><option value="1" selected>Once (1×)</option></select></label></div><button class="btn primary full" type="submit">Save policy</button></form></div>
     <div class="form-card"><div class="form-title"><h2>Feature control</h2><p>Add / remove visibility of app features instantly across the whole app.</p></div>${featuresHtml}</div>
     <div class="form-card"><div class="form-title"><h2>Doctor filters manager</h2><p>Add or remove custom quick-filter chips shown on the Doctors list.</p></div>
     <form id="addFilterForm" class="sheet-form"><div class="field-grid two"><label><span>Chip label</span><input name="label" placeholder="e.g. High Potential" required></label><label><span>Doctor field</span><select name="field"><option value="coreCategory">CORE / NON-CORE</option><option value="speciality">Speciality</option><option value="productFocus">Focused brand</option><option value="area">Area</option></select></label></div><div class="field-grid two"><label><span>Match</span><select name="op"><option value="equals">Equals</option><option value="contains">Contains</option><option value="not_empty">Not empty</option></select></label><label><span>Value</span><input name="value" placeholder="Value to match"></label></div><button class="btn primary full" type="submit">Add filter</button></form>
@@ -2946,6 +2952,7 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
     $('#adminUnlockPin')?.addEventListener('keydown',e=>{if(e.key==='Enter')$('#adminUnlockBtn')?.click();});
     $('#adminLockBtn')?.addEventListener('click',()=>{adminUnlocked=false;renderAdmin();});
     $('#removeAdminPinBtn')?.addEventListener('click',()=>{if(!adminUnlocked){toast('Unlock first.');return;}if(!confirm('Remove Super Admin PIN?'))return;state.admin.pinHash='';adminUnlocked=false;saveState(false);renderAdmin();toast('Super Admin PIN removed.');});
+    $('#visitPolicyForm')?.addEventListener('submit',e=>{e.preventDefault();if(!adminUnlocked){toast('Unlock Super Admin first.');return;}const fd=new FormData(e.currentTarget);state.settings.coreMonthlyTarget=num(fd.get('coreMonthlyTarget'))||3;state.settings.nonCoreMonthlyTarget=num(fd.get('nonCoreMonthlyTarget'))||1;saveState(false);toast(`CORE doctors now target ${state.settings.coreMonthlyTarget}× / month; NON-CORE ${state.settings.nonCoreMonthlyTarget}× / month.`);});
     $$('[data-toggle-feature]').forEach(cb=>cb.addEventListener('change',e=>{if(!adminUnlocked){e.target.checked=!e.target.checked;toast('Unlock Super Admin first.');return;}state.featureFlags[e.target.dataset.toggleFeature]=e.target.checked;saveState(false);applyFeatureVisibility();}));
     $('#addFilterForm')?.addEventListener('submit',e=>{e.preventDefault();if(!adminUnlocked){toast('Unlock Super Admin first.');return;}const fd=new FormData(e.currentTarget),label=clean(fd.get('label'));if(!label){toast('Enter a chip label.');return;}state.filtersConfig.doctors.push({id:uid('filt'),label,field:fd.get('field'),op:fd.get('op'),value:clean(fd.get('value'))});saveState(false);renderAdmin();toast('Filter added — visible as a chip on Doctors.');});
     $$('[data-remove-filter]').forEach(b=>b.addEventListener('click',()=>{if(!adminUnlocked){toast('Unlock Super Admin first.');return;}state.filtersConfig.doctors=state.filtersConfig.doctors.filter(f=>f.id!==b.dataset.removeFilter);saveState(false);renderAdmin();}));
