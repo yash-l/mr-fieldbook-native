@@ -153,15 +153,16 @@
           <button class="settings-card action-card practical" data-action="manage-appointments"><span>AP</span><div><h3>Appointments</h3><p>Get / confirm doctor appointment + Smart Plan lock</p></div></button>
           <button class="settings-card action-card practical" data-action="quick-complete-doctor"><span>QD</span><div><h3>Quick Doctor Details</h3><p>Fast search, frequency, timing and automatic nearby GPS</p></div></button>
           <button class="settings-card action-card practical" data-action="area-time-plan"><span>AT</span><div><h3>Smart Monthly Doctor Plan</h3><p>Area + time + visit frequency + nearest route</p></div></button>
-          <button class="settings-card action-card practical" data-action="manage-rcpa"><span>R</span><div><h3>RCPA / Competition</h3><p id="rcpaToolText">Chemist prescription audit</p></div></button>
-          <button class="settings-card action-card practical" data-action="manage-sales"><span>↗</span><div><h3>Target & Sales</h3><p id="salesToolText">Monthly target vs achievement</p></div></button>
-          <button class="settings-card action-card" id="manageDistributorsBtn"><span>DS</span><div><h3>Distributor setup</h3><p id="distributorCountText">0 distributors</p></div></button>
-          <button class="settings-card action-card" id="manageSchemesBtn"><span>%</span><div><h3>Date-wise offers</h3><p id="schemeCountText">0 active schemes</p></div></button>
-          <button class="settings-card action-card" data-action="nearby-hospitals"><span>◎</span><div><h3>Nearby hospital discovery</h3><p>GPS → hospital → doctor → Google verify</p></div></button>
-          <button class="settings-card action-card" data-action="plan-route"><span>⌖</span><div><h3>Doctor route</h3><p>Filter → manually select doctors → build Google Maps route</p></div></button>
-          <button class="settings-card action-card" data-action="new-order"><span>₹</span><div><h3>New POB order</h3><p>Chemist → distributor → products</p></div></button>
-          <button class="settings-card action-card san-overlay-card" id="sanOverlayBtn"><span>CP</span><div><h3>SAN copy overlay</h3><p>Copy in SAN → floating paste box → review in MR</p></div></button>
-          <button class="settings-card action-card" data-action="app-update"><span>↑</span><div><h3>App update</h3><p id="appUpdateToolText">One-tap check, download and install</p></div></button>
+          <button class="settings-card action-card practical" data-feature="advancePlanning" data-action="advance-planning"><span>30D</span><div><h3>Advance Planning</h3><p>Date-wise auto patch + automatic daily plan + next 30 days</p></div></button>
+          <button class="settings-card action-card practical" data-feature="rcpa" data-action="manage-rcpa"><span>R</span><div><h3>RCPA / Competition</h3><p id="rcpaToolText">Chemist prescription audit</p></div></button>
+          <button class="settings-card action-card practical" data-feature="sales" data-action="manage-sales"><span>↗</span><div><h3>Target & Sales</h3><p id="salesToolText">Monthly target vs achievement</p></div></button>
+          <button class="settings-card action-card" data-feature="distributors" id="manageDistributorsBtn"><span>DS</span><div><h3>Distributor setup</h3><p id="distributorCountText">0 distributors</p></div></button>
+          <button class="settings-card action-card" data-feature="schemes" id="manageSchemesBtn"><span>%</span><div><h3>Date-wise offers</h3><p id="schemeCountText">0 active schemes</p></div></button>
+          <button class="settings-card action-card" data-feature="nearby" data-action="nearby-hospitals"><span>◎</span><div><h3>Nearby hospital discovery</h3><p>GPS → hospital → doctor → Google verify</p></div></button>
+          <button class="settings-card action-card" data-feature="route" data-action="plan-route"><span>⌖</span><div><h3>Doctor route</h3><p>Filter → manually select doctors → build Google Maps route</p></div></button>
+          <button class="settings-card action-card" data-feature="orders" data-action="new-order"><span>₹</span><div><h3>New POB order</h3><p>Chemist → distributor → products</p></div></button>
+          <button class="settings-card action-card san-overlay-card" data-feature="sanOverlay" id="sanOverlayBtn"><span>CP</span><div><h3>SAN copy overlay</h3><p>Copy in SAN → floating paste box → review in MR</p></div></button>
+          <button class="settings-card action-card" data-feature="appUpdate" data-action="app-update"><span>↑</span><div><h3>App update</h3><p id="appUpdateToolText">One-tap check, download and install</p></div></button>
         </div>
         </details>
 
@@ -222,6 +223,11 @@
 
         <div class="danger-card"><div><h3>Reset app data</h3><p>Deletes local doctors, chemists, calls and settings on this device.</p></div><button id="resetBtn" class="btn danger compact">Reset</button></div>
       </section>
+
+      <section class="page" data-page="admin">
+        <div class="page-title-row"><div><h1>Super Admin</h1><p>Feature control, filters, RBAC and data safety</p></div></div>
+        <div id="adminBody"></div>
+      </section>
     </main>
 
     <nav class="bottom-nav" aria-label="Primary">
@@ -230,6 +236,7 @@
       <button data-nav="chemists" aria-label="Chemists"><span aria-hidden="true">✚</span><small>Chemists</small></button>
       <button data-nav="visits" aria-label="Activity"><span aria-hidden="true">✓</span><small>Activity</small></button>
       <button data-nav="tools" aria-label="Tools"><span aria-hidden="true">⚙</span><small>Tools</small></button>
+      <button data-nav="admin" aria-label="Super Admin"><span aria-hidden="true">◆</span><small>Admin</small></button>
     </nav>
   </div>
 
