@@ -4,7 +4,7 @@
   const STORE_KEY = 'mr-daily-auto-v3';
   const STORE_BACKUP_KEY = 'mr-daily-auto-v3-last-good';
   const APP_VERSION = 1.82;
-  const APP_RELEASE = '1.9.0';
+  const APP_RELEASE = '1.9.2';
   const SCHEMA_VERSION = 6; // bump this, and only this, whenever migrateState()'s output shape changes
   const METRICS = [
     ['calls', 'Calls'],

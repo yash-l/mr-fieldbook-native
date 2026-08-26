@@ -1,4 +1,4 @@
-const CACHE = 'mr-one-shell-v191-admin-cloud-config';
+const CACHE = 'mr-one-shell-v192-github-oauth';
 
 const PRECACHE = [
   './',

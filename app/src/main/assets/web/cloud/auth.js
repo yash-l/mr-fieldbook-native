@@ -38,6 +38,25 @@
     return data;
   }
 
+
+  function getOAuthRedirectUrl() {
+    // Android APK runs from file:// and returns through our verified app-owned deep link.
+    // Render/browser builds return to the same deployed page.
+    if (location.protocol === 'file:') return 'mrone://auth/callback';
+    return `${location.origin}${location.pathname}`;
+  }
+
+  async function signInWithGitHub() {
+    const client = window.MRCloud.getClient();
+    if (!client) throw new Error('Cloud sync is not configured yet.');
+    const { data, error } = await client.auth.signInWithOAuth({
+      provider: 'github',
+      options: { redirectTo: getOAuthRedirectUrl() }
+    });
+    if (error) throw error;
+    return data;
+  }
+
   async function signOut() {
     const client = window.MRCloud.getClient();
     if (!client) return;
@@ -52,6 +71,6 @@
 
   window.MRCloud = window.MRCloud || {};
   Object.assign(window.MRCloud, {
-    authInit: init, signUp, signIn, signOut, getUserId, getUserEmail, isSignedIn, onAuthChange
+    authInit: init, signUp, signIn, signInWithGitHub, signOut, getUserId, getUserEmail, isSignedIn, onAuthChange
   });
 })();

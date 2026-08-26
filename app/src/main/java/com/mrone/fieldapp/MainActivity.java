@@ -135,7 +135,8 @@ public final class MainActivity extends Activity {
         webView.addJavascriptInterface(new AndroidBridge(), "AndroidBridge");
         webView.setWebViewClient(new AppWebViewClient());
         webView.setWebChromeClient(new AppWebChromeClient());
-        webView.loadUrl("file:///android_asset/web/index.html");
+        String initialUrl = oauthWebUrlFromIntent(getIntent());
+        webView.loadUrl(initialUrl != null ? initialUrl : "file:///android_asset/web/index.html");
     }
 
     @Override
@@ -149,7 +150,30 @@ public final class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        String oauthUrl = oauthWebUrlFromIntent(intent);
+        if (oauthUrl != null && webView != null) {
+            webReady = false;
+            webView.loadUrl(oauthUrl);
+            return;
+        }
         mainHandler.postDelayed(this::deliverPendingSanText, 350L);
+    }
+
+    private String oauthWebUrlFromIntent(Intent intent) {
+        if (intent == null) return null;
+        Uri data = intent.getData();
+        if (data == null) return null;
+        if (!"mrone".equalsIgnoreCase(data.getScheme())) return null;
+        if (!"auth".equalsIgnoreCase(data.getHost())) return null;
+        String path = data.getPath();
+        if (path == null || !path.startsWith("/callback")) return null;
+
+        StringBuilder url = new StringBuilder("file:///android_asset/web/index.html");
+        String query = data.getEncodedQuery();
+        String fragment = data.getEncodedFragment();
+        if (query != null && !query.isEmpty()) url.append('?').append(query);
+        if (fragment != null && !fragment.isEmpty()) url.append('#').append(fragment);
+        return url.toString();
     }
 
     private void deliverPendingSanText() {

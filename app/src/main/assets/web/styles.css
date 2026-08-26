@@ -392,3 +392,10 @@ input[type="checkbox"]{accent-color:var(--brand)}
 .machine-patch-row>span{background:var(--goldsoft)!important;color:var(--gold)!important}
 .core-badge.core{background:linear-gradient(135deg,#d8a94a,#a9781c)!important;color:#2a1c02!important}
 .chip[data-value^="core:C"].active{background:linear-gradient(135deg,#d8a94a,#a9781c)!important;color:#2a1c02!important;border-color:transparent!important}
+
+/* v1.9.2 — Cloud OAuth */
+.github-signin{min-height:52px;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:800;letter-spacing:.01em}
+.github-signin span{font-size:18px}
+.cloud-email-fallback{margin-top:14px;border-top:1px solid var(--border);padding-top:10px}
+.cloud-email-fallback summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-weight:700;color:var(--text2)}
+.cloud-email-fallback[open] summary{margin-bottom:10px}

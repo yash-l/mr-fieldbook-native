@@ -51,8 +51,10 @@
     const signedIn = window.MRCloud.isSignedIn();
     const sync = state.cloudSync || {};
     if (!signedIn) {
-      return `${configCard}<div class="form-card"><div class="form-title"><h2>Cloud sync — sign in</h2><p>Sign in to sync this device's doctors, chemists, records and plans to your account. Local data stays fully usable offline either way.</p></div>
-      <form id="cloudAuthForm" class="sheet-form"><div class="field-grid two"><label><span>Email</span><input name="email" type="email" required></label><label><span>Password</span><input name="password" type="password" minlength="6" required></label></div><div class="tag-row"><button class="btn primary" type="submit" data-cloud-mode="signin">Sign in</button><button class="btn secondary" type="submit" data-cloud-mode="signup">Create account</button></div><p id="cloudAuthError" class="error-text"></p></form></div>`;
+      return `${configCard}<div class="form-card cloud-auth-card"><div class="form-title"><h2>Cloud sync — sign in</h2><p>Use GitHub for one-tap sign-in, or keep email/password as a fallback. Local MR data remains usable offline.</p></div>
+      <button id="cloudGitHubBtn" class="btn primary full github-signin" type="button" aria-label="Continue with GitHub"><span aria-hidden="true">◉</span> Continue with GitHub</button>
+      <small class="muted-line">GitHub OAuth must be enabled once in Supabase Authentication → Providers. Android returns through <code>mrone://auth/callback</code>; Render returns to this site.</small>
+      <details class="cloud-email-fallback"><summary>Use email &amp; password instead</summary><form id="cloudAuthForm" class="sheet-form"><div class="field-grid two"><label><span>Email</span><input name="email" type="email" autocomplete="email" required></label><label><span>Password</span><input name="password" type="password" autocomplete="current-password" minlength="6" required></label></div><div class="tag-row"><button class="btn secondary" type="submit" data-cloud-mode="signin">Sign in</button><button class="btn secondary" type="submit" data-cloud-mode="signup">Create account</button></div></form></details><p id="cloudAuthError" class="error-text" role="alert"></p></div>`;
     }
     const statusLine = sync.pending ? `⏳ Sync pending${sync.lastError ? ` — last error: ${esc(sync.lastError)}` : ''}` : sync.lastSyncedAt ? `✓ Synced ${esc(new Date(sync.lastSyncedAt).toLocaleString('en-IN'))}` : 'Not synced yet';
     return `${configCard}<div class="form-card"><div class="form-title"><h2>Cloud sync</h2><p>Signed in as ${esc(window.MRCloud.getUserEmail() || '')}. ${esc(statusLine)}</p></div>
@@ -147,6 +149,17 @@
       window.MRCloudConfig?.clear?.();
       toast('Cloud configuration cleared. Local data is unchanged.');
       renderAdmin();
+    });
+    $('#cloudGitHubBtn')?.addEventListener('click', async () => {
+      const errorEl = $('#cloudAuthError');
+      try {
+        if (errorEl) errorEl.textContent = '';
+        toast('Opening GitHub sign-in…');
+        await window.MRCloud.signInWithGitHub();
+      } catch (err) {
+        if (errorEl) errorEl.textContent = err.message || 'GitHub sign-in failed.';
+        toast(err.message || 'GitHub sign-in failed.');
+      }
     });
     $('#cloudAuthForm')?.addEventListener('submit', async (e) => {
       e.preventDefault();
