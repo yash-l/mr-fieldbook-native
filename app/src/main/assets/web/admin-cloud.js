@@ -51,10 +51,18 @@
     const signedIn = window.MRCloud.isSignedIn();
     const sync = state.cloudSync || {};
     if (!signedIn) {
-      return `${configCard}<div class="form-card cloud-auth-card"><div class="form-title"><h2>Cloud sync — sign in</h2><p>Use GitHub for one-tap sign-in, or keep email/password as a fallback. Local MR data remains usable offline.</p></div>
-      <button id="cloudGitHubBtn" class="btn primary full github-signin" type="button" aria-label="Continue with GitHub"><span aria-hidden="true">◉</span> Continue with GitHub</button>
-      <small class="muted-line">GitHub OAuth must be enabled once in Supabase Authentication → Providers. Android returns through <code>mrone://auth/callback</code>; Render returns to this site.</small>
-      <details class="cloud-email-fallback"><summary>Use email &amp; password instead</summary><form id="cloudAuthForm" class="sheet-form"><div class="field-grid two"><label><span>Email</span><input name="email" type="email" autocomplete="email" required></label><label><span>Password</span><input name="password" type="password" autocomplete="current-password" minlength="6" required></label></div><div class="tag-row"><button class="btn secondary" type="submit" data-cloud-mode="signin">Sign in</button><button class="btn secondary" type="submit" data-cloud-mode="signup">Create account</button></div></form></details><p id="cloudAuthError" class="error-text" role="alert"></p></div>`;
+      return `${configCard}<div class="form-card cloud-auth-card"><div class="form-title"><h2>Cloud sync — Email OTP</h2><p>No password required. Enter your email, receive a 6-digit code, verify it, then sync this device.</p></div>
+      <form id="cloudOtpForm" class="sheet-form" novalidate>
+        <label><span>Email</span><input id="cloudOtpEmail" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required></label>
+        <div class="tag-row"><button id="cloudSendOtpBtn" class="btn primary" type="button">Send login code</button></div>
+        <div id="cloudOtpVerifyArea" class="cloud-otp-verify hidden">
+          <label><span>6-digit login code</span><input id="cloudOtpCode" name="otp" class="otp-code-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="000000" aria-describedby="cloudOtpHelp"></label>
+          <small id="cloudOtpHelp" class="muted-line">Enter the code sent by Supabase to your email.</small>
+          <div class="tag-row"><button id="cloudVerifyOtpBtn" class="btn primary" type="button">Verify &amp; sign in</button><button id="cloudResendOtpBtn" class="btn secondary" type="button">Resend code</button></div>
+        </div>
+      </form>
+      <details class="cloud-email-fallback"><summary>Use email &amp; password instead</summary><form id="cloudAuthForm" class="sheet-form"><div class="field-grid two"><label><span>Email</span><input name="email" type="email" autocomplete="email" required></label><label><span>Password</span><input name="password" type="password" autocomplete="current-password" minlength="6" required></label></div><div class="tag-row"><button class="btn secondary" type="submit" data-cloud-mode="signin">Sign in</button><button class="btn secondary" type="submit" data-cloud-mode="signup">Create account</button></div></form></details>
+      <p id="cloudAuthError" class="error-text" role="alert" aria-live="assertive"></p></div>`;
     }
     const statusLine = sync.pending ? `⏳ Sync pending${sync.lastError ? ` — last error: ${esc(sync.lastError)}` : ''}` : sync.lastSyncedAt ? `✓ Synced ${esc(new Date(sync.lastSyncedAt).toLocaleString('en-IN'))}` : 'Not synced yet';
     return `${configCard}<div class="form-card"><div class="form-title"><h2>Cloud sync</h2><p>Signed in as ${esc(window.MRCloud.getUserEmail() || '')}. ${esc(statusLine)}</p></div>
@@ -150,15 +158,55 @@
       toast('Cloud configuration cleared. Local data is unchanged.');
       renderAdmin();
     });
-    $('#cloudGitHubBtn')?.addEventListener('click', async () => {
+    let otpSending = false;
+    async function sendOtpCode() {
+      if (otpSending) return;
+      const emailInput = $('#cloudOtpEmail');
+      const verifyArea = $('#cloudOtpVerifyArea');
       const errorEl = $('#cloudAuthError');
+      const email = clean(emailInput?.value || '');
+      if (errorEl) errorEl.textContent = '';
+      try {
+        otpSending = true;
+        $('#cloudSendOtpBtn')?.setAttribute('disabled', 'disabled');
+        $('#cloudResendOtpBtn')?.setAttribute('disabled', 'disabled');
+        toast('Sending login code…');
+        await window.MRCloud.sendEmailOtp(email);
+        verifyArea?.classList.remove('hidden');
+        $('#cloudOtpCode')?.focus();
+        toast('Login code sent. Check your email.');
+      } catch (err) {
+        if (errorEl) errorEl.textContent = err.message || 'Could not send login code.';
+        toast(err.message || 'Could not send login code.');
+      } finally {
+        otpSending = false;
+        $('#cloudSendOtpBtn')?.removeAttribute('disabled');
+        $('#cloudResendOtpBtn')?.removeAttribute('disabled');
+      }
+    }
+
+    $('#cloudSendOtpBtn')?.addEventListener('click', sendOtpCode);
+    $('#cloudResendOtpBtn')?.addEventListener('click', sendOtpCode);
+    $('#cloudOtpEmail')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendOtpCode(); } });
+    $('#cloudOtpCode')?.addEventListener('input', (e) => { e.currentTarget.value = String(e.currentTarget.value || '').replace(/\D/g, '').slice(0, 6); });
+    $('#cloudOtpCode')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('#cloudVerifyOtpBtn')?.click(); } });
+    $('#cloudVerifyOtpBtn')?.addEventListener('click', async () => {
+      const errorEl = $('#cloudAuthError');
+      const email = clean($('#cloudOtpEmail')?.value || '');
+      const token = clean($('#cloudOtpCode')?.value || '');
+      const btn = $('#cloudVerifyOtpBtn');
       try {
         if (errorEl) errorEl.textContent = '';
-        toast('Opening GitHub sign-in…');
-        await window.MRCloud.signInWithGitHub();
+        btn?.setAttribute('disabled', 'disabled');
+        toast('Verifying code…');
+        await window.MRCloud.verifyEmailOtp(email, token);
+        renderAdmin();
+        toast('Cloud sign-in successful.');
       } catch (err) {
-        if (errorEl) errorEl.textContent = err.message || 'GitHub sign-in failed.';
-        toast(err.message || 'GitHub sign-in failed.');
+        if (errorEl) errorEl.textContent = err.message || 'Code verification failed.';
+        toast(err.message || 'Code verification failed.');
+      } finally {
+        btn?.removeAttribute('disabled');
       }
     });
     $('#cloudAuthForm')?.addEventListener('submit', async (e) => {

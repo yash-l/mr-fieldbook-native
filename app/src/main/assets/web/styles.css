@@ -394,8 +394,11 @@ input[type="checkbox"]{accent-color:var(--brand)}
 .chip[data-value^="core:C"].active{background:linear-gradient(135deg,#d8a94a,#a9781c)!important;color:#2a1c02!important;border-color:transparent!important}
 
 /* v1.9.2 — Cloud OAuth */
-.github-signin{min-height:52px;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:800;letter-spacing:.01em}
-.github-signin span{font-size:18px}
 .cloud-email-fallback{margin-top:14px;border-top:1px solid var(--border);padding-top:10px}
 .cloud-email-fallback summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-weight:700;color:var(--text2)}
 .cloud-email-fallback[open] summary{margin-bottom:10px}
+
+/* v1.9.3 — passwordless Email OTP cloud sign-in */
+.cloud-otp-verify{margin-top:12px;padding:14px;border:1px solid var(--border);border-radius:16px;background:var(--surface2)}
+.otp-code-input{font-size:22px!important;font-weight:800;letter-spacing:.32em;text-align:center;font-variant-numeric:tabular-nums;min-height:52px}
+.cloud-auth-card .btn[disabled]{opacity:.55;pointer-events:none}

@@ -10,7 +10,8 @@
   async function init() {
     const client = window.MRCloud.getClient();
     if (!client) return null;
-    const { data } = await client.auth.getSession();
+    const { data, error } = await client.auth.getSession();
+    if (error) throw error;
     currentSession = data?.session || null;
     client.auth.onAuthStateChange((_event, session) => {
       currentSession = session;
@@ -20,6 +21,38 @@
     return currentSession;
   }
 
+  async function sendEmailOtp(email) {
+    const client = window.MRCloud.getClient();
+    if (!client) throw new Error('Cloud sync is not configured yet.');
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    if (!/^\S+@\S+\.\S+$/.test(normalizedEmail)) throw new Error('Enter a valid email address.');
+    const { data, error } = await client.auth.signInWithOtp({
+      email: normalizedEmail,
+      options: { shouldCreateUser: true }
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  async function verifyEmailOtp(email, token) {
+    const client = window.MRCloud.getClient();
+    if (!client) throw new Error('Cloud sync is not configured yet.');
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const normalizedToken = String(token || '').replace(/\D/g, '');
+    if (!/^\S+@\S+\.\S+$/.test(normalizedEmail)) throw new Error('Enter a valid email address.');
+    if (!/^\d{6}$/.test(normalizedToken)) throw new Error('Enter the 6-digit login code.');
+    const { data, error } = await client.auth.verifyOtp({
+      email: normalizedEmail,
+      token: normalizedToken,
+      type: 'email'
+    });
+    if (error) throw error;
+    currentSession = data?.session || null;
+    notify();
+    return data;
+  }
+
+  // Password auth remains as an optional fallback for existing accounts.
   async function signUp(email, password) {
     const client = window.MRCloud.getClient();
     if (!client) throw new Error('Cloud sync is not configured yet.');
@@ -38,29 +71,11 @@
     return data;
   }
 
-
-  function getOAuthRedirectUrl() {
-    // Android APK runs from file:// and returns through our verified app-owned deep link.
-    // Render/browser builds return to the same deployed page.
-    if (location.protocol === 'file:') return 'mrone://auth/callback';
-    return `${location.origin}${location.pathname}`;
-  }
-
-  async function signInWithGitHub() {
-    const client = window.MRCloud.getClient();
-    if (!client) throw new Error('Cloud sync is not configured yet.');
-    const { data, error } = await client.auth.signInWithOAuth({
-      provider: 'github',
-      options: { redirectTo: getOAuthRedirectUrl() }
-    });
-    if (error) throw error;
-    return data;
-  }
-
   async function signOut() {
     const client = window.MRCloud.getClient();
     if (!client) return;
-    await client.auth.signOut();
+    const { error } = await client.auth.signOut();
+    if (error) throw error;
     currentSession = null;
     notify();
   }
@@ -71,6 +86,15 @@
 
   window.MRCloud = window.MRCloud || {};
   Object.assign(window.MRCloud, {
-    authInit: init, signUp, signIn, signInWithGitHub, signOut, getUserId, getUserEmail, isSignedIn, onAuthChange
+    authInit: init,
+    sendEmailOtp,
+    verifyEmailOtp,
+    signUp,
+    signIn,
+    signOut,
+    getUserId,
+    getUserEmail,
+    isSignedIn,
+    onAuthChange
   });
 })();

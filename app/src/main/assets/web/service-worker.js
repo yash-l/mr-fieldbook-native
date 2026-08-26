@@ -1,4 +1,4 @@
-const CACHE = 'mr-one-shell-v192-github-oauth';
+const CACHE = 'mr-one-shell-v193-email-otp';
 
 const PRECACHE = [
   './',
