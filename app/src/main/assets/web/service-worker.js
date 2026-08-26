@@ -1,4 +1,4 @@
-const CACHE = 'mr-one-shell-v193-email-otp';
+const CACHE = 'mr-one-shell-v194-magic-link';
 
 const PRECACHE = [
   './',

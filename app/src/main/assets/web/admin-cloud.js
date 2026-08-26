@@ -51,15 +51,11 @@
     const signedIn = window.MRCloud.isSignedIn();
     const sync = state.cloudSync || {};
     if (!signedIn) {
-      return `${configCard}<div class="form-card cloud-auth-card"><div class="form-title"><h2>Cloud sync — Email OTP</h2><p>No password required. Enter your email, receive a 6-digit code, verify it, then sync this device.</p></div>
-      <form id="cloudOtpForm" class="sheet-form" novalidate>
-        <label><span>Email</span><input id="cloudOtpEmail" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required></label>
-        <div class="tag-row"><button id="cloudSendOtpBtn" class="btn primary" type="button">Send login code</button></div>
-        <div id="cloudOtpVerifyArea" class="cloud-otp-verify hidden">
-          <label><span>6-digit login code</span><input id="cloudOtpCode" name="otp" class="otp-code-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="000000" aria-describedby="cloudOtpHelp"></label>
-          <small id="cloudOtpHelp" class="muted-line">Enter the code sent by Supabase to your email.</small>
-          <div class="tag-row"><button id="cloudVerifyOtpBtn" class="btn primary" type="button">Verify &amp; sign in</button><button id="cloudResendOtpBtn" class="btn secondary" type="button">Resend code</button></div>
-        </div>
+      return `${configCard}<div class="form-card cloud-auth-card"><div class="form-title"><h2>Cloud sync — Secure email link</h2><p>No password or 6-digit code required. Enter your email, open the secure confirmation link Supabase already sends, and MR-One will complete sign-in automatically.</p></div>
+      <form id="cloudMagicLinkForm" class="sheet-form" novalidate>
+        <label><span>Email</span><input id="cloudMagicEmail" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required></label>
+        <div class="tag-row"><button id="cloudSendMagicBtn" class="btn primary" type="submit">Send secure login link</button></div>
+        <p id="cloudMagicStatus" class="muted-line" role="status" aria-live="polite">Open the link from your email. No OTP entry is needed.</p>
       </form>
       <details class="cloud-email-fallback"><summary>Use email &amp; password instead</summary><form id="cloudAuthForm" class="sheet-form"><div class="field-grid two"><label><span>Email</span><input name="email" type="email" autocomplete="email" required></label><label><span>Password</span><input name="password" type="password" autocomplete="current-password" minlength="6" required></label></div><div class="tag-row"><button class="btn secondary" type="submit" data-cloud-mode="signin">Sign in</button><button class="btn secondary" type="submit" data-cloud-mode="signup">Create account</button></div></form></details>
       <p id="cloudAuthError" class="error-text" role="alert" aria-live="assertive"></p></div>`;
@@ -158,57 +154,57 @@
       toast('Cloud configuration cleared. Local data is unchanged.');
       renderAdmin();
     });
-    let otpSending = false;
-    async function sendOtpCode() {
-      if (otpSending) return;
-      const emailInput = $('#cloudOtpEmail');
-      const verifyArea = $('#cloudOtpVerifyArea');
-      const errorEl = $('#cloudAuthError');
-      const email = clean(emailInput?.value || '');
-      if (errorEl) errorEl.textContent = '';
-      try {
-        otpSending = true;
-        $('#cloudSendOtpBtn')?.setAttribute('disabled', 'disabled');
-        $('#cloudResendOtpBtn')?.setAttribute('disabled', 'disabled');
-        toast('Sending login code…');
-        await window.MRCloud.sendEmailOtp(email);
-        verifyArea?.classList.remove('hidden');
-        $('#cloudOtpCode')?.focus();
-        toast('Login code sent. Check your email.');
-      } catch (err) {
-        if (errorEl) errorEl.textContent = err.message || 'Could not send login code.';
-        toast(err.message || 'Could not send login code.');
-      } finally {
-        otpSending = false;
-        $('#cloudSendOtpBtn')?.removeAttribute('disabled');
-        $('#cloudResendOtpBtn')?.removeAttribute('disabled');
+    let magicSending = false;
+    let magicCooldownUntil = 0;
+    let magicTimer = null;
+
+    function updateMagicCooldown() {
+      const btn = $('#cloudSendMagicBtn');
+      const status = $('#cloudMagicStatus');
+      if (!btn) return;
+      const remaining = Math.max(0, Math.ceil((magicCooldownUntil - Date.now()) / 1000));
+      if (remaining > 0) {
+        btn.disabled = true;
+        btn.textContent = `Resend in ${remaining}s`;
+      } else {
+        btn.disabled = magicSending;
+        btn.textContent = magicSending ? 'Sending…' : 'Send secure login link';
+        if (magicTimer) { clearInterval(magicTimer); magicTimer = null; }
       }
+      if (status && remaining > 0) status.textContent = 'Login link sent. Open the email link to sign in.';
     }
 
-    $('#cloudSendOtpBtn')?.addEventListener('click', sendOtpCode);
-    $('#cloudResendOtpBtn')?.addEventListener('click', sendOtpCode);
-    $('#cloudOtpEmail')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendOtpCode(); } });
-    $('#cloudOtpCode')?.addEventListener('input', (e) => { e.currentTarget.value = String(e.currentTarget.value || '').replace(/\D/g, '').slice(0, 6); });
-    $('#cloudOtpCode')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('#cloudVerifyOtpBtn')?.click(); } });
-    $('#cloudVerifyOtpBtn')?.addEventListener('click', async () => {
+    $('#cloudMagicLinkForm')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (magicSending || Date.now() < magicCooldownUntil) return;
+      const email = clean($('#cloudMagicEmail')?.value || '');
       const errorEl = $('#cloudAuthError');
-      const email = clean($('#cloudOtpEmail')?.value || '');
-      const token = clean($('#cloudOtpCode')?.value || '');
-      const btn = $('#cloudVerifyOtpBtn');
+      const status = $('#cloudMagicStatus');
+      if (errorEl) errorEl.textContent = '';
       try {
-        if (errorEl) errorEl.textContent = '';
-        btn?.setAttribute('disabled', 'disabled');
-        toast('Verifying code…');
-        await window.MRCloud.verifyEmailOtp(email, token);
-        renderAdmin();
-        toast('Cloud sign-in successful.');
+        magicSending = true;
+        updateMagicCooldown();
+        if (status) status.textContent = 'Sending secure login link…';
+        await window.MRCloud.sendMagicLink(email);
+        magicCooldownUntil = Date.now() + 60000;
+        if (status) status.textContent = '✓ Link sent. Open it from your email; MR-One will sign you in automatically.';
+        toast('Secure login link sent. Check your email.');
+        if (!magicTimer) magicTimer = setInterval(updateMagicCooldown, 1000);
       } catch (err) {
-        if (errorEl) errorEl.textContent = err.message || 'Code verification failed.';
-        toast(err.message || 'Code verification failed.');
+        const message = err.message || 'Could not send login link.';
+        if (errorEl) errorEl.textContent = message;
+        if (status) status.textContent = `⚠ ${message}`;
+        toast(message);
+        if (/too many|rate limit/i.test(message)) {
+          magicCooldownUntil = Date.now() + 60000;
+          if (!magicTimer) magicTimer = setInterval(updateMagicCooldown, 1000);
+        }
       } finally {
-        btn?.removeAttribute('disabled');
+        magicSending = false;
+        updateMagicCooldown();
       }
     });
+
     $('#cloudAuthForm')?.addEventListener('submit', async (e) => {
       e.preventDefault();
       const btn = e.submitter || e.target.querySelector('button[type="submit"]');

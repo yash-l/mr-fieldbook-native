@@ -13,7 +13,7 @@
       return null;
     }
     client = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
-      auth: { persistSession: true, autoRefreshToken: true, storageKey: 'mr-one-cloud-auth' }
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, storageKey: 'mr-one-cloud-auth' }
     });
     return client;
   }

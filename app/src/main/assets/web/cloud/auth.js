@@ -21,18 +21,34 @@
     return currentSession;
   }
 
-  async function sendEmailOtp(email) {
+  function getMagicLinkRedirect() {
+    try {
+      if (window.location.protocol === 'file:') return 'mrone://auth/callback';
+      if (/^https?:$/.test(window.location.protocol)) return `${window.location.origin}${window.location.pathname}`;
+    } catch (_) {}
+    return undefined;
+  }
+
+  async function sendMagicLink(email) {
     const client = window.MRCloud.getClient();
     if (!client) throw new Error('Cloud sync is not configured yet.');
     const normalizedEmail = String(email || '').trim().toLowerCase();
     if (!/^\S+@\S+\.\S+$/.test(normalizedEmail)) throw new Error('Enter a valid email address.');
-    const { data, error } = await client.auth.signInWithOtp({
-      email: normalizedEmail,
-      options: { shouldCreateUser: true }
-    });
-    if (error) throw error;
+    const options = { shouldCreateUser: true };
+    const redirectTo = getMagicLinkRedirect();
+    if (redirectTo) options.emailRedirectTo = redirectTo;
+    const { data, error } = await client.auth.signInWithOtp({ email: normalizedEmail, options });
+    if (error) {
+      const status = Number(error.status || error.statusCode || 0);
+      if (status === 429 || /rate limit/i.test(String(error.message || ''))) {
+        throw new Error('Too many email requests. Wait before sending another login link.');
+      }
+      throw error;
+    }
     return data;
   }
+
+  const sendEmailOtp = sendMagicLink;
 
   async function verifyEmailOtp(email, token) {
     const client = window.MRCloud.getClient();
@@ -87,6 +103,7 @@
   window.MRCloud = window.MRCloud || {};
   Object.assign(window.MRCloud, {
     authInit: init,
+    sendMagicLink,
     sendEmailOtp,
     verifyEmailOtp,
     signUp,
