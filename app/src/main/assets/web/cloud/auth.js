@@ -21,58 +21,19 @@
     return currentSession;
   }
 
-  function getMagicLinkRedirect() {
-    try {
-      if (window.location.protocol === 'file:') return 'mrone://auth/callback';
-      if (/^https?:$/.test(window.location.protocol)) return `${window.location.origin}${window.location.pathname}`;
-    } catch (_) {}
-    return undefined;
-  }
-
-  async function sendMagicLink(email) {
-    const client = window.MRCloud.getClient();
-    if (!client) throw new Error('Cloud sync is not configured yet.');
+  // Primary auth: Supabase email + password.
+  function validateCredentials(email, password) {
     const normalizedEmail = String(email || '').trim().toLowerCase();
     if (!/^\S+@\S+\.\S+$/.test(normalizedEmail)) throw new Error('Enter a valid email address.');
-    const options = { shouldCreateUser: true };
-    const redirectTo = getMagicLinkRedirect();
-    if (redirectTo) options.emailRedirectTo = redirectTo;
-    const { data, error } = await client.auth.signInWithOtp({ email: normalizedEmail, options });
-    if (error) {
-      const status = Number(error.status || error.statusCode || 0);
-      if (status === 429 || /rate limit/i.test(String(error.message || ''))) {
-        throw new Error('Too many email requests. Wait before sending another login link.');
-      }
-      throw error;
-    }
-    return data;
+    if (String(password || '').length < 6) throw new Error('Password must be at least 6 characters.');
+    return { email: normalizedEmail, password: String(password) };
   }
 
-  const sendEmailOtp = sendMagicLink;
-
-  async function verifyEmailOtp(email, token) {
-    const client = window.MRCloud.getClient();
-    if (!client) throw new Error('Cloud sync is not configured yet.');
-    const normalizedEmail = String(email || '').trim().toLowerCase();
-    const normalizedToken = String(token || '').replace(/\D/g, '');
-    if (!/^\S+@\S+\.\S+$/.test(normalizedEmail)) throw new Error('Enter a valid email address.');
-    if (!/^\d{6}$/.test(normalizedToken)) throw new Error('Enter the 6-digit login code.');
-    const { data, error } = await client.auth.verifyOtp({
-      email: normalizedEmail,
-      token: normalizedToken,
-      type: 'email'
-    });
-    if (error) throw error;
-    currentSession = data?.session || null;
-    notify();
-    return data;
-  }
-
-  // Password auth remains as an optional fallback for existing accounts.
   async function signUp(email, password) {
     const client = window.MRCloud.getClient();
     if (!client) throw new Error('Cloud sync is not configured yet.');
-    const { data, error } = await client.auth.signUp({ email, password });
+    const credentials = validateCredentials(email, password);
+    const { data, error } = await client.auth.signUp(credentials);
     if (error) throw error;
     return data;
   }
@@ -80,7 +41,8 @@
   async function signIn(email, password) {
     const client = window.MRCloud.getClient();
     if (!client) throw new Error('Cloud sync is not configured yet.');
-    const { data, error } = await client.auth.signInWithPassword({ email, password });
+    const credentials = validateCredentials(email, password);
+    const { data, error } = await client.auth.signInWithPassword(credentials);
     if (error) throw error;
     currentSession = data.session;
     notify();
@@ -103,9 +65,6 @@
   window.MRCloud = window.MRCloud || {};
   Object.assign(window.MRCloud, {
     authInit: init,
-    sendMagicLink,
-    sendEmailOtp,
-    verifyEmailOtp,
     signUp,
     signIn,
     signOut,

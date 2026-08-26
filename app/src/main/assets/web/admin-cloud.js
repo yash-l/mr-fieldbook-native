@@ -51,13 +51,13 @@
     const signedIn = window.MRCloud.isSignedIn();
     const sync = state.cloudSync || {};
     if (!signedIn) {
-      return `${configCard}<div class="form-card cloud-auth-card"><div class="form-title"><h2>Cloud sync — Secure email link</h2><p>No password or 6-digit code required. Enter your email, open the secure confirmation link Supabase already sends, and MR-One will complete sign-in automatically.</p></div>
-      <form id="cloudMagicLinkForm" class="sheet-form" novalidate>
-        <label><span>Email</span><input id="cloudMagicEmail" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required></label>
-        <div class="tag-row"><button id="cloudSendMagicBtn" class="btn primary" type="submit">Send secure login link</button></div>
-        <p id="cloudMagicStatus" class="muted-line" role="status" aria-live="polite">Open the link from your email. No OTP entry is needed.</p>
+      return `${configCard}<div class="form-card cloud-auth-card"><div class="form-title"><h2>Cloud sync — Email &amp; password</h2><p>Simple Supabase account login. No OTP, magic link, GitHub OAuth, or SMTP is used by MR-One for sign-in.</p></div>
+      <form id="cloudAuthForm" class="sheet-form" novalidate>
+        <label><span>Email</span><input name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required></label>
+        <label><span>Password</span><div style="display:flex;gap:8px;align-items:center"><input id="cloudPasswordInput" name="password" type="password" autocomplete="current-password" minlength="6" required style="flex:1"><button id="toggleCloudPasswordBtn" class="btn secondary compact" type="button" aria-label="Show or hide password">Show</button></div></label>
+        <div class="tag-row"><button class="btn primary" type="submit" data-cloud-mode="signin">Sign in</button><button class="btn secondary" type="submit" data-cloud-mode="signup">Create account</button></div>
+        <p class="muted-line">For immediate first-time account creation, disable mandatory email confirmation in Supabase Auth settings. Existing accounts can sign in directly.</p>
       </form>
-      <details class="cloud-email-fallback"><summary>Use email &amp; password instead</summary><form id="cloudAuthForm" class="sheet-form"><div class="field-grid two"><label><span>Email</span><input name="email" type="email" autocomplete="email" required></label><label><span>Password</span><input name="password" type="password" autocomplete="current-password" minlength="6" required></label></div><div class="tag-row"><button class="btn secondary" type="submit" data-cloud-mode="signin">Sign in</button><button class="btn secondary" type="submit" data-cloud-mode="signup">Create account</button></div></form></details>
       <p id="cloudAuthError" class="error-text" role="alert" aria-live="assertive"></p></div>`;
     }
     const statusLine = sync.pending ? `⏳ Sync pending${sync.lastError ? ` — last error: ${esc(sync.lastError)}` : ''}` : sync.lastSyncedAt ? `✓ Synced ${esc(new Date(sync.lastSyncedAt).toLocaleString('en-IN'))}` : 'Not synced yet';
@@ -154,55 +154,14 @@
       toast('Cloud configuration cleared. Local data is unchanged.');
       renderAdmin();
     });
-    let magicSending = false;
-    let magicCooldownUntil = 0;
-    let magicTimer = null;
-
-    function updateMagicCooldown() {
-      const btn = $('#cloudSendMagicBtn');
-      const status = $('#cloudMagicStatus');
-      if (!btn) return;
-      const remaining = Math.max(0, Math.ceil((magicCooldownUntil - Date.now()) / 1000));
-      if (remaining > 0) {
-        btn.disabled = true;
-        btn.textContent = `Resend in ${remaining}s`;
-      } else {
-        btn.disabled = magicSending;
-        btn.textContent = magicSending ? 'Sending…' : 'Send secure login link';
-        if (magicTimer) { clearInterval(magicTimer); magicTimer = null; }
-      }
-      if (status && remaining > 0) status.textContent = 'Login link sent. Open the email link to sign in.';
-    }
-
-    $('#cloudMagicLinkForm')?.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      if (magicSending || Date.now() < magicCooldownUntil) return;
-      const email = clean($('#cloudMagicEmail')?.value || '');
-      const errorEl = $('#cloudAuthError');
-      const status = $('#cloudMagicStatus');
-      if (errorEl) errorEl.textContent = '';
-      try {
-        magicSending = true;
-        updateMagicCooldown();
-        if (status) status.textContent = 'Sending secure login link…';
-        await window.MRCloud.sendMagicLink(email);
-        magicCooldownUntil = Date.now() + 60000;
-        if (status) status.textContent = '✓ Link sent. Open it from your email; MR-One will sign you in automatically.';
-        toast('Secure login link sent. Check your email.');
-        if (!magicTimer) magicTimer = setInterval(updateMagicCooldown, 1000);
-      } catch (err) {
-        const message = err.message || 'Could not send login link.';
-        if (errorEl) errorEl.textContent = message;
-        if (status) status.textContent = `⚠ ${message}`;
-        toast(message);
-        if (/too many|rate limit/i.test(message)) {
-          magicCooldownUntil = Date.now() + 60000;
-          if (!magicTimer) magicTimer = setInterval(updateMagicCooldown, 1000);
-        }
-      } finally {
-        magicSending = false;
-        updateMagicCooldown();
-      }
+    $('#toggleCloudPasswordBtn')?.addEventListener('click', () => {
+      const input = $('#cloudPasswordInput');
+      const btn = $('#toggleCloudPasswordBtn');
+      if (!input || !btn) return;
+      const show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      btn.textContent = show ? 'Hide' : 'Show';
+      btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
     });
 
     $('#cloudAuthForm')?.addEventListener('submit', async (e) => {
@@ -214,7 +173,8 @@
         if (mode === 'signup') await window.MRCloud.signUp(email, password);
         else await window.MRCloud.signIn(email, password);
         renderAdmin();
-        toast(mode === 'signup' ? 'Account created. Check your email if confirmation is required.' : 'Signed in.');
+        const signedInNow = window.MRCloud.isSignedIn();
+        toast(mode === 'signup' ? (signedInNow ? 'Account created and signed in.' : 'Account created. Supabase requires email confirmation before sign-in.') : 'Signed in.');
       } catch (err) { const el = $('#cloudAuthError'); if (el) el.textContent = err.message || 'Sign-in failed.'; }
     });
     $('#cloudSyncNowBtn')?.addEventListener('click', async () => {
