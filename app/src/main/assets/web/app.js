@@ -4,6 +4,8 @@
   const STORE_KEY = 'mr-daily-auto-v3';
   const STORE_BACKUP_KEY = 'mr-daily-auto-v3-last-good';
   const APP_VERSION = 1.82;
+  const APP_RELEASE = '1.9.0';
+  const SCHEMA_VERSION = 6; // bump this, and only this, whenever migrateState()'s output shape changes
   const METRICS = [
     ['calls', 'Calls'],
     ['inputs', 'Input Distributed'],
@@ -388,11 +390,12 @@ function defaultSchemes() {
       backupHistory: [],
       filtersConfig: {doctors:[], chemists:[]},
       featureFlags: {...DEFAULT_FEATURE_FLAGS},
-      admin: {pinHash:''}
+      admin: {pinHash:''},
+      cloudSync: {lastSyncedAt:'', pending:false, lastError:'', migratedAt:''}
     };
   }
 
-  function migrateState(raw) {
+  function applyStateShape(raw) {
     const fresh = makeDefaultState();
     const out = {
       ...fresh,
@@ -431,7 +434,8 @@ function defaultSchemes() {
       backupHistory: Array.isArray(raw?.backupHistory) ? raw.backupHistory : [],
       filtersConfig: {doctors: Array.isArray(raw?.filtersConfig?.doctors)?raw.filtersConfig.doctors:[], chemists: Array.isArray(raw?.filtersConfig?.chemists)?raw.filtersConfig.chemists:[]},
       featureFlags: {...DEFAULT_FEATURE_FLAGS, ...(raw && typeof raw.featureFlags==='object' ? raw.featureFlags : {})},
-      admin: {pinHash: clean(raw?.admin?.pinHash||'')}
+      admin: {pinHash: clean(raw?.admin?.pinHash||'')},
+      cloudSync: {lastSyncedAt: clean(raw?.cloudSync?.lastSyncedAt||''), pending: Boolean(raw?.cloudSync?.pending), lastError: clean(raw?.cloudSync?.lastError||''), migratedAt: clean(raw?.cloudSync?.migratedAt||'')}
     };
     out.doctors.forEach(d => {
       if (!d.id) d.id = uid('dr');
@@ -505,12 +509,49 @@ function defaultSchemes() {
     return out;
   }
 
+  // ===================== Versioning + migration system (v1.9.0) =====================
+  // schemaVersion tracks the shape of localStorage data, independent of APP_RELEASE
+  // (the human-readable app version). applyStateShape() above already defensively
+  // spreads every existing field forward and only fills gaps with defaults — it
+  // never blindly overwrites a field that's actually present in `raw`. This wrapper
+  // adds the missing pieces: an explicit version number, a pre-migration snapshot
+  // so any migration can be rolled back, and an audit trail of what happened when.
+  function migrateState(raw) {
+    const fromVersion = Number(raw?.schemaVersion) || (raw ? 1 : 0); // pre-v1.9.0 saves had no schemaVersion field at all
+    const needsMigration = Boolean(raw) && fromVersion < SCHEMA_VERSION;
+    let snapshotKey = '';
+    if (needsMigration) {
+      try {
+        snapshotKey = `${STORE_KEY}-preschema-v${fromVersion}-${Date.now()}`;
+        localStorage.setItem(snapshotKey, JSON.stringify(raw));
+      } catch (_) { /* snapshot best-effort; never block the migration itself on this */ }
+    }
+    const out = applyStateShape(raw);
+    out.schemaVersion = SCHEMA_VERSION;
+    out.appRelease = APP_RELEASE;
+    out.migrationLog = Array.isArray(raw?.migrationLog) ? raw.migrationLog.slice(-19) : [];
+    if (needsMigration) {
+      out.migrationLog.push({ fromVersion, toVersion: SCHEMA_VERSION, appliedAt: new Date().toISOString(), snapshotKey });
+    }
+    return out;
+  }
+
+  // Roll back to the local snapshot taken automatically right before a schema
+  // migration ran. Only ever called explicitly from Super Admin — never automatic.
+  function rollbackToPreMigrationSnapshot(snapshotKey) {
+    const raw = localStorage.getItem(snapshotKey);
+    if (!raw) throw new Error('That snapshot is no longer available on this device.');
+    const parsed = JSON.parse(raw);
+    snapshotBackup('pre-schema-rollback'); // never lose current data either, even when rolling back
+    state = applyStateShape(parsed); // restore the OLD shape as-is, do not re-stamp a schema version onto it
+    state.schemaVersion = Number(parsed?.schemaVersion) || 0;
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    return true;
+  }
+
   function loadState() {
     try {
       const parsed = JSON.parse(localStorage.getItem(STORE_KEY));
-      if(parsed && typeof parsed==='object' && parsed.version!==APP_VERSION){
-        try{localStorage.setItem(`${STORE_KEY}-premigration-${Date.now()}`, JSON.stringify(parsed));}catch(_){/*ignore, non-fatal*/}
-      }
       return parsed && typeof parsed === 'object' ? migrateState(parsed) : makeDefaultState();
     } catch (_) {
       try {
@@ -575,9 +616,6 @@ function defaultSchemes() {
   let lastProximityDoctorId = '';
   let lastFieldLocation = null;
   let appUpdateInfo = null;
-  let adminUnlocked = false;
-  let doctorRecordTab = 'notes';
-  let planningPickedDate = localISODate();
 
   function checksumOf(str){let h=0;for(let i=0;i<str.length;i++){h=(h*31+str.charCodeAt(i))|0;}return (h>>>0).toString(16);}
   const SNAPSHOT_PREFIX = `${STORE_KEY}-snap-`;
@@ -634,6 +672,9 @@ function defaultSchemes() {
       return false;
     }
     if (render) renderAll();
+    if (window.MRCloud?.isEnabled?.()) {
+      window.MRCloud.scheduleSync(() => state, (s, report) => { if (report && !report.skipped) renderAdminCloudStatus?.(); });
+    }
     return true;
   }
 
@@ -2277,7 +2318,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
       <form id="recordForm" class="sheet-form">
         <label><span>${isDoctor?'Doctor name':'Chemist name'}</span><input id="recordName" name="name" required autocomplete="off" value="${esc(old.name||'')}" placeholder="${isDoctor?'Type doctor name':'Type chemist name'}"></label>
         ${!isDoctor?`<label><span>Preferred distributor (optional)</span><select name="linkedDistributorId">${distributorOptions(preferredDistributor(old)?.id||'')}</select></label>`:''}
-        ${isDoctor?`<label><span>Hospital / clinic / firm name</span><input id="recordHospital" name="hospital" required autocomplete="off" value="${esc(doctorHospital(old))}" placeholder="Type hospital or clinic name"></label><div class="fast-google-verify"><a id="recordGoogleVerifyBtn" class="btn secondary full" href="#" target="_blank" rel="noopener">Google verify doctor + firm</a><small id="recordGoogleVerifyQuery" class="muted-line">Enter doctor + hospital/firm name to verify.</small></div><details id="recordAdvancedDetails" class="fast-entry-details" ${id?'open':''}><summary>More details <small>chemist, timing, address, GPS, notes</small></summary><div class="fast-entry-details-body"><div class="lookup-label field-block"><span class="field-caption">Doctor under chemist</span><div class="lookup-field"><input id="recordChemistSearch" type="search" autocomplete="off" value="${esc(linkedChemist(old)?.name||'')}" placeholder="Search chemist name or area…"><input id="recordChemistId" name="linkedChemistId" type="hidden" value="${esc(existingChemist)}"><div id="recordChemistResults" class="search-results lookup-results hidden"></div></div></div><div class="weekly-report-fields"><div class="form-section-title"><h3>TM weekly / company data</h3><p>Saved once and reused automatically in weekly Excel reports.</p></div><div class="field-grid two"><label><span>Speciality</span><input name="speciality" value="${esc(old.speciality||old.specialty||'')}" placeholder="PEDIA / GYNAEC / GP"></label><label><span>C / NC</span><select name="coreCategory"><option value="">Not set</option><option value="C" ${String(old.coreCategory||'').toUpperCase()==='C'?'selected':''}>C — Core</option><option value="NC" ${String(old.coreCategory||'').toUpperCase()==='NC'?'selected':''}>NC — Non Core</option></select></label><label><span>Focused brand</span><input name="productFocus" value="${esc(old.productFocus||old.campaign||'')}" placeholder="Simyl MCT / MumMum 1…"></label><label><span>Potential (unit/month)</span><input name="potentialUnits" type="number" min="0" step="1" value="${esc(num(old.potentialUnits)||'')}"></label><label><span>Input given date</span><input name="inputGivenDate" type="date" value="${esc(dateOnly(old.inputGivenDate))}"></label><label><span>DM last visit</span><input name="dmLastVisit" type="date" value="${esc(dateOnly(old.dmLastVisit))}"></label><label><span>RM last visit</span><input name="rmLastVisit" type="date" value="${esc(dateOnly(old.rmLastVisit))}"></label></div></div><div class="field-grid two"><label><span>Monthly visits</span><select name="monthlyVisitTarget"><option value="1" ${doctorVisitPolicy(old).target===1?'selected':''}>1× / month</option><option value="2" ${doctorVisitPolicy(old).target===2?'selected':''}>2× / month</option><option value="3" ${doctorVisitPolicy(old).target===3?'selected':''}>3× / month</option><option value="4" ${doctorVisitPolicy(old).target===4?'selected':''}>4× / month</option></select></label><label><span>Custom minimum gap days</span><input name="minVisitGapDays" type="number" min="0" max="31" value="${esc(num(old.minVisitGapDays)||0)}" placeholder="0 = automatic"></label></div><div class="schedule-card clinic-system-card"><div class="form-section-title"><h3>Clinic meeting system</h3><p>Field access comes before route planning.</p></div><label><span>Clinic system</span><select id="recordClinicSystem" name="clinicSystem"><option value="direct" ${doctorClinicSystem(old)==='direct'?'selected':''}>Direct meeting in saved days/time</option><option value="appointment" ${doctorClinicSystem(old)==='appointment'?'selected':''}>Appointment required</option><option value="card_later" ${doctorClinicSystem(old)==='card_later'?'selected':''}>Card drop first → later meeting</option></select></label><div id="recordCardDropFields" class="field-grid two ${doctorClinicSystem(old)==='card_later'?'':'hidden'}"><label><span>Card drop time</span><input name="cardDropTime" type="time" value="${esc(doctorCardDropTime(old))}"></label><div class="notice">Mark Card given ✓ on the day. Only then later meeting enters the route.</div></div></div><div id="recordMeetingTimingCard" class="schedule-card ${doctorClinicSystem(old)==='appointment'?'appointment-mode-muted':''}"><div class="form-section-title"><h3>Doctor meeting timing</h3><p>Direct/card-later use this window. Appointment-only doctors can leave regular timing blank.</p></div><div class="schedule-quick"><button type="button" id="monSatDaysBtn">Mon–Sat</button><button type="button" id="allDaysBtn">Every day</button><button type="button" id="clearDaysBtn">Clear</button></div><div class="day-selector">${DAY_NAMES.map((day,i)=>`<label class="day-option"><input type="checkbox" name="meetingDays" value="${i}" ${normalizeMeetingDays(old.meetingDays).includes(i)?'checked':''}><span>${day}</span></label>`).join('')}</div><div class="field-grid two timing-grid"><label><span>First timing from</span><input name="meetingFrom" type="time" value="${esc(normalizeTime(old.meetingFrom))}"></label><label><span>First timing to</span><input name="meetingTo" type="time" value="${esc(normalizeTime(old.meetingTo))}"></label><label><span>Second timing from (optional)</span><input name="meetingFrom2" type="time" value="${esc(normalizeTime(old.meetingFrom2))}"></label><label><span>Second timing to (optional)</span><input name="meetingTo2" type="time" value="${esc(normalizeTime(old.meetingTo2))}"></label></div></div>`:''}
+        ${isDoctor?`<label><span>Hospital / clinic / firm name</span><input id="recordHospital" name="hospital" required autocomplete="off" value="${esc(doctorHospital(old))}" placeholder="Type hospital or clinic name"></label><div class="fast-google-verify"><a id="recordGoogleVerifyBtn" class="btn secondary full" href="#" target="_blank" rel="noopener">Google verify doctor + firm</a><small id="recordGoogleVerifyQuery" class="muted-line">Enter doctor + hospital/firm name to verify.</small></div><details id="recordAdvancedDetails" class="fast-entry-details" ${id?'open':''}><summary>More details <small>chemist, timing, address, GPS, notes</small></summary><div class="fast-entry-details-body"><div class="lookup-label field-block"><span class="field-caption">Doctor under chemist</span><div class="lookup-field"><input id="recordChemistSearch" type="search" autocomplete="off" value="${esc(linkedChemist(old)?.name||'')}" placeholder="Search chemist name or area…"><input id="recordChemistId" name="linkedChemistId" type="hidden" value="${esc(existingChemist)}"><div id="recordChemistResults" class="search-results lookup-results hidden"></div></div></div><div class="weekly-report-fields"><div class="form-section-title"><h3>TM weekly / company data</h3><p>Saved once and reused automatically in weekly Excel reports.</p></div><div class="field-grid two"><label><span>Speciality</span><input name="speciality" value="${esc(old.speciality||old.specialty||'')}" placeholder="PEDIA / GYNAEC / GP"></label><label><span>C / NC</span><select name="coreCategory"><option value="">Not set</option><option value="C" ${String(old.coreCategory||'').toUpperCase()==='C'?'selected':''}>C — Core</option><option value="NC" ${String(old.coreCategory||'').toUpperCase()==='NC'?'selected':''}>NC — Non Core</option></select></label><label><span>Focused brand</span><input name="productFocus" value="${esc(old.productFocus||old.campaign||'')}" placeholder="Simyl MCT / MumMum 1…"></label><label><span>Potential (unit/month)</span><input name="potentialUnits" type="number" min="0" step="1" value="${esc(num(old.potentialUnits)||'')}"></label><label><span>Input given date</span><input name="inputGivenDate" type="date" value="${esc(dateOnly(old.inputGivenDate))}"></label><label><span>DM last visit</span><input name="dmLastVisit" type="date" value="${esc(dateOnly(old.dmLastVisit))}"></label><label><span>RM last visit</span><input name="rmLastVisit" type="date" value="${esc(dateOnly(old.rmLastVisit))}"></label></div></div><div class="field-grid two"><label><span>Monthly visits</span><select name="monthlyVisitTarget"><option value="" ${!num(old.monthlyVisitTarget)?'selected':''}>Auto (CORE/NON-CORE default)</option><option value="1" ${num(old.monthlyVisitTarget)===1?'selected':''}>1× / month</option><option value="2" ${num(old.monthlyVisitTarget)===2?'selected':''}>2× / month</option><option value="3" ${num(old.monthlyVisitTarget)===3?'selected':''}>3× / month</option><option value="4" ${num(old.monthlyVisitTarget)===4?'selected':''}>4× / month</option></select><small class="muted-line" id="recordVisitTargetHint">${doctorVisitPolicy(old).core==='C'?`Auto = ${num(state.settings.coreMonthlyTarget)||3}× (CORE)`:doctorVisitPolicy(old).core==='NC'?`Auto = ${num(state.settings.nonCoreMonthlyTarget)||1}× (NON-CORE)`:'Auto = 2× until CORE/NON-CORE is set'}</small></label><label><span>Custom minimum gap days</span><input name="minVisitGapDays" type="number" min="0" max="31" value="${esc(num(old.minVisitGapDays)||0)}" placeholder="0 = automatic"></label></div><div class="schedule-card clinic-system-card"><div class="form-section-title"><h3>Clinic meeting system</h3><p>Field access comes before route planning.</p></div><label><span>Clinic system</span><select id="recordClinicSystem" name="clinicSystem"><option value="direct" ${doctorClinicSystem(old)==='direct'?'selected':''}>Direct meeting in saved days/time</option><option value="appointment" ${doctorClinicSystem(old)==='appointment'?'selected':''}>Appointment required</option><option value="card_later" ${doctorClinicSystem(old)==='card_later'?'selected':''}>Card drop first → later meeting</option></select></label><div id="recordCardDropFields" class="field-grid two ${doctorClinicSystem(old)==='card_later'?'':'hidden'}"><label><span>Card drop time</span><input name="cardDropTime" type="time" value="${esc(doctorCardDropTime(old))}"></label><div class="notice">Mark Card given ✓ on the day. Only then later meeting enters the route.</div></div></div><div id="recordMeetingTimingCard" class="schedule-card ${doctorClinicSystem(old)==='appointment'?'appointment-mode-muted':''}"><div class="form-section-title"><h3>Doctor meeting timing</h3><p>Direct/card-later use this window. Appointment-only doctors can leave regular timing blank.</p></div><div class="schedule-quick"><button type="button" id="monSatDaysBtn">Mon–Sat</button><button type="button" id="allDaysBtn">Every day</button><button type="button" id="clearDaysBtn">Clear</button></div><div class="day-selector">${DAY_NAMES.map((day,i)=>`<label class="day-option"><input type="checkbox" name="meetingDays" value="${i}" ${normalizeMeetingDays(old.meetingDays).includes(i)?'checked':''}><span>${day}</span></label>`).join('')}</div><div class="field-grid two timing-grid"><label><span>First timing from</span><input name="meetingFrom" type="time" value="${esc(normalizeTime(old.meetingFrom))}"></label><label><span>First timing to</span><input name="meetingTo" type="time" value="${esc(normalizeTime(old.meetingTo))}"></label><label><span>Second timing from (optional)</span><input name="meetingFrom2" type="time" value="${esc(normalizeTime(old.meetingFrom2))}"></label><label><span>Second timing to (optional)</span><input name="meetingTo2" type="time" value="${esc(normalizeTime(old.meetingTo2))}"></label></div></div>`:''}
         <label><span>Address</span><textarea name="address" rows="2" placeholder="Clinic / shop full address">${esc(old.address||'')}</textarea></label>
         <label><span>Area / place</span><input name="area" value="${esc((isDoctor?inferDoctorArea(old):old.area)||old.hq||state.profile.hq||'')}"></label>
         ${isDoctor?`<div class="location-card">
@@ -2294,6 +2335,8 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
       const refreshGoogleVerify=()=>{const name=clean(nameInput?.value),hospital=clean(hospitalInput?.value),area=clean(areaInput?.value)||state.profile.hq||'';const q=[name,hospital,area,'Gujarat','India'].filter(Boolean).join(' ');googleBtn.href=(name&&hospital)?`https://www.google.com/search?q=${encodeURIComponent(q)}`:'#';googleBtn.classList.toggle('disabled-link',!(name&&hospital));googleQuery.textContent=(name&&hospital)?q:'Enter doctor + hospital/firm name to verify.';};
       [nameInput,hospitalInput,areaInput].filter(Boolean).forEach(el=>el.addEventListener('input',refreshGoogleVerify));googleBtn.addEventListener('click',e=>{if(!clean(nameInput?.value)||!clean(hospitalInput?.value)){e.preventDefault();toast('Enter doctor name and hospital/firm name first.');}});refreshGoogleVerify();
       const syncRecordClinicSystem=()=>{const system=$('#recordClinicSystem').value;$('#recordCardDropFields').classList.toggle('hidden',system!=='card_later');$('#recordMeetingTimingCard').classList.toggle('appointment-mode-muted',system==='appointment');};$('#recordClinicSystem').addEventListener('change',syncRecordClinicSystem);syncRecordClinicSystem();
+      const coreSelect=$('#recordForm select[name="coreCategory"]'),visitHint=$('#recordVisitTargetHint');
+      coreSelect?.addEventListener('change',()=>{const v=coreSelect.value;visitHint.textContent=v==='C'?`Auto = ${num(state.settings.coreMonthlyTarget)||3}× (CORE)`:v==='NC'?`Auto = ${num(state.settings.nonCoreMonthlyTarget)||1}× (NON-CORE)`:'Auto = 2× until CORE/NON-CORE is set';});
       const chemistInput=$('#recordChemistSearch'),chemistIdInput=$('#recordChemistId'),chemistResults=$('#recordChemistResults');
       const showChemists=()=>{const q=clean(chemistInput.value).toLowerCase();const items=state.chemists.filter(c=>!q||[c.name,c.area,c.hq,c.address].join(' ').toLowerCase().includes(q)).sort((a,b)=>a.name.localeCompare(b.name)).slice(0,25);chemistResults.innerHTML=items.length?items.map(c=>`<button type="button" class="search-result" data-record-chemist-id="${esc(c.id)}"><strong>${esc(c.name)}</strong><small>${esc([c.area||c.hq,c.address].filter(Boolean).join(' • '))}</small></button>`).join(''):`<div class="lookup-empty">No chemist found.</div>`;chemistResults.classList.remove('hidden');};
       chemistInput.addEventListener('focus',showChemists);chemistInput.addEventListener('input',()=>{chemistIdInput.value='';showChemists();});chemistResults.addEventListener('click',e=>{const b=e.target.closest('[data-record-chemist-id]');if(!b)return;const c=chemistById(b.dataset.recordChemistId);if(!c)return;chemistIdInput.value=c.id;chemistInput.value=c.name;chemistResults.classList.add('hidden');});
@@ -2312,7 +2355,7 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
         const anyTime=from||to||from2||to2;if(anyTime&&!days.length){toast('Choose doctor meeting day(s).');return;}if((from&&!to)||(!from&&to)||(from2&&!to2)||(!from2&&to2)){toast('Complete both From and To for each timing.');return;}if((from&&timeMinutes(to)<=timeMinutes(from))||(from2&&timeMinutes(to2)<=timeMinutes(from2))){toast('Meeting To time must be later than From time.');return;}if(days.length&&!anyTime){toast('Add at least one meeting time or clear the selected days.');return;}
         rec.meetingDays=days;rec.meetingFrom=from;rec.meetingTo=to;rec.meetingFrom2=from2;rec.meetingTo2=to2;
         rec.clinicSystem=clean(fd.get('clinicSystem'))||'direct';rec.cardDropTime=rec.clinicSystem==='card_later'?normalizeTime(fd.get('cardDropTime')):'';if(rec.clinicSystem==='card_later'&&!rec.cardDropTime){toast('Set card drop time.');return;}
-        rec.speciality=clean(fd.get('speciality'));rec.specialty=rec.speciality;rec.coreCategory=clean(fd.get('coreCategory')).toUpperCase();rec.productFocus=clean(fd.get('productFocus'));rec.campaign=rec.campaign||rec.productFocus;rec.potentialUnits=Math.max(0,num(fd.get('potentialUnits')));rec.inputGivenDate=dateOnly(fd.get('inputGivenDate'));rec.dmLastVisit=dateOnly(fd.get('dmLastVisit'));rec.rmLastVisit=dateOnly(fd.get('rmLastVisit'));rec.monthlyVisitTarget=Math.max(1,Math.min(4,Math.round(num(fd.get('monthlyVisitTarget'))||2)));rec.minVisitGapDays=Math.max(0,Math.round(num(fd.get('minVisitGapDays'))||0));
+        rec.speciality=clean(fd.get('speciality'));rec.specialty=rec.speciality;rec.coreCategory=clean(fd.get('coreCategory')).toUpperCase();rec.productFocus=clean(fd.get('productFocus'));rec.campaign=rec.campaign||rec.productFocus;rec.potentialUnits=Math.max(0,num(fd.get('potentialUnits')));rec.inputGivenDate=dateOnly(fd.get('inputGivenDate'));rec.dmLastVisit=dateOnly(fd.get('dmLastVisit'));rec.rmLastVisit=dateOnly(fd.get('rmLastVisit'));const rawTarget=clean(fd.get('monthlyVisitTarget'));rec.monthlyVisitTarget=rawTarget?Math.max(1,Math.min(4,Math.round(num(rawTarget)))):'';rec.minVisitGapDays=Math.max(0,Math.round(num(fd.get('minVisitGapDays'))||0));
         rec.linkedChemistId=clean(fd.get('linkedChemistId'));const c=chemistById(rec.linkedChemistId);rec.chemistName=c?.name||'';
       }
       if(!id){rec.createdAt=new Date().toISOString();arr.push(rec);}else Object.assign(old,rec);
@@ -2779,186 +2822,49 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
     window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstallPrompt=e;});window.matchMedia?.('(prefers-color-scheme: dark)')?.addEventListener?.('change',()=>{if((state.settings.theme||'system')==='system')applyTheme();});
   }
 
-  /* ===================== Doctor Records: Notes / Prescriptions / Top products ===================== */
-  function doctorTopProducts(doctorId,limit=6){
-    const totals={};
-    state.doctorPrescriptions.filter(x=>x.doctorId===doctorId).forEach(r=>(r.products||[]).forEach(p=>{if(!p.product)return;totals[p.product]=(totals[p.product]||0)+(num(p.qty)||1);}));
-    return Object.entries(totals).sort((a,b)=>b[1]-a[1]).slice(0,limit).map(([product,qty])=>({product,qty}));
-  }
-  function rxProductRow(item={}){
-    return `<div class="order-item-row" data-rx-row style="grid-template-columns:1.5fr .7fr 30px"><label><span>Product</span><select name="rxProduct">${productOptions(item.product)}</select></label><label><span>Qty</span><input name="rxQty" type="number" min="1" step="1" value="${esc(item.qty||1)}"></label><button type="button" class="remove-order-item" data-remove-rx-row aria-label="Remove">×</button></div>`;
-  }
-  function renderDoctorRecordsBody(doctorId){
-    const doc=doctorById(doctorId);if(!doc)return empty('Doctor not found.');
-    const notes=state.doctorNotes.filter(x=>x.doctorId===doctorId).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
-    const rx=state.doctorPrescriptions.filter(x=>x.doctorId===doctorId).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
-    const top=doctorTopProducts(doctorId);
-    const tabs=`<div class="segmented" id="doctorRecordTabs" style="grid-template-columns:repeat(3,1fr)"><button class="${doctorRecordTab==='notes'?'active':''}" data-record-tab="notes">Notes</button><button class="${doctorRecordTab==='rx'?'active':''}" data-record-tab="rx">Prescriptions</button><button class="${doctorRecordTab==='top'?'active':''}" data-record-tab="top">Top products</button></div>`;
-    let body='';
-    if(doctorRecordTab==='rx'){
-      body=`<form id="addDoctorRxForm" class="sheet-form"><label><span>Date</span><input type="date" name="date" value="${localISODate()}"></label><div id="rxProductRows">${rxProductRow()}</div><button type="button" id="addRxProductRow" class="btn secondary compact">+ Another product</button><button class="btn primary full" type="submit" style="margin-top:10px">Save prescription record</button></form><div class="detail-section"><h4>Saved prescription records (${rx.length})</h4>${rx.length?rx.map(r=>`<div class="record-card" style="margin-bottom:8px"><div class="tag-row">${(r.products||[]).map(p=>`<span class="tag good">${esc(p.product)} × ${esc(p.qty)}</span>`).join('')}</div><div class="tag-row"><span class="tag">${esc(prettyDate(r.date))}</span><button data-delete-doctor-rx="${esc(r.id)}" class="tag bad" style="border:0;cursor:pointer">Delete</button></div></div>`).join(''):empty('No prescription records yet. These are kept separate from visit notes.')}</div>`;
-    } else if(doctorRecordTab==='top'){
-      body=`<div class="detail-section"><h4>Most-prescribed products</h4>${top.length?top.map((t,i)=>`<div class="machine-patch-row"><span>${i+1}</span><div><strong>${esc(t.product)}</strong><small>${esc(t.qty)} unit(s) recorded across prescription entries</small></div></div>`).join(''):empty('No prescription records saved yet. Add some in the Prescriptions tab to build this automatically.')}</div>`;
-    } else {
-      body=`<form id="addDoctorNoteForm" class="sheet-form"><label><span>Date</span><input type="date" name="date" value="${localISODate()}"></label><label><span>Note</span><textarea name="note" rows="3" placeholder="General note — kept separate from visit notes and prescription records"></textarea></label><button class="btn primary full" type="submit">Add note</button></form><div class="detail-section"><h4>Saved notes (${notes.length})</h4>${notes.length?notes.map(n=>`<div class="record-card" style="margin-bottom:8px"><div class="record-note">${esc(n.note)}</div><div class="tag-row"><span class="tag">${esc(prettyDate(n.date))}</span><button data-delete-doctor-note="${esc(n.id)}" class="tag bad" style="border:0;cursor:pointer">Delete</button></div></div>`).join(''):empty('No notes yet.')}</div>`;
-    }
-    return `<div class="detail-hero"><div class="avatar">${esc(initials(doc.name))}</div><div><h3>${esc(doctorDisplayName(doc))}</h3><p>Structured records — never mixed with normal visit notes.</p></div></div>${tabs}${body}`;
-  }
-  function doctorRecordsCenter(doctorId){
-    const doc=doctorById(doctorId);if(!doc)return;
-    doctorRecordTab='notes';
-    openSheet('Doctor Records',doctorDisplayName(doc),renderDoctorRecordsBody(doctorId));
-    bindDoctorRecordsEvents(doctorId);
-  }
-  function refreshDoctorRecordsSheet(doctorId){$('#sheetBody').innerHTML=renderDoctorRecordsBody(doctorId);bindDoctorRecordsEvents(doctorId);}
-  function bindDoctorRecordsEvents(doctorId){
-    $('#doctorRecordTabs')?.addEventListener('click',e=>{const b=e.target.closest('[data-record-tab]');if(!b)return;doctorRecordTab=b.dataset.recordTab;refreshDoctorRecordsSheet(doctorId);});
-    $('#addDoctorNoteForm')?.addEventListener('submit',e=>{e.preventDefault();const fd=new FormData(e.currentTarget),note=clean(fd.get('note'));if(!note){toast('Write a note first.');return;}state.doctorNotes.push({id:uid('dnote'),doctorId,date:dateOnly(fd.get('date'))||localISODate(),note,createdAt:new Date().toISOString()});saveState(false);toast('Note saved.');refreshDoctorRecordsSheet(doctorId);});
-    $$('[data-delete-doctor-note]').forEach(b=>b.addEventListener('click',()=>{state.doctorNotes=state.doctorNotes.filter(x=>x.id!==b.dataset.deleteDoctorNote);saveState(false);refreshDoctorRecordsSheet(doctorId);}));
-    const rxRoot=$('#rxProductRows');
-    rxRoot?.addEventListener('click',e=>{const r=e.target.closest('[data-remove-rx-row]');if(r)r.closest('[data-rx-row]')?.remove();});
-    $('#addRxProductRow')?.addEventListener('click',()=>rxRoot.insertAdjacentHTML('beforeend',rxProductRow()));
-    $('#addDoctorRxForm')?.addEventListener('submit',e=>{
-      e.preventDefault();
-      const products=$$('[data-rx-row]',rxRoot).map(row=>({product:clean($('select[name="rxProduct"]',row).value),qty:Math.max(1,num($('input[name="rxQty"]',row).value)||1)})).filter(p=>p.product);
-      if(!products.length){toast('Select at least one product.');return;}
-      const fd=new FormData(e.currentTarget);
-      state.doctorPrescriptions.push({id:uid('drx'),doctorId,date:dateOnly(fd.get('date'))||localISODate(),products,createdAt:new Date().toISOString()});
-      saveState(false);toast('Prescription record saved.');refreshDoctorRecordsSheet(doctorId);
-    });
-    $$('[data-delete-doctor-rx]').forEach(b=>b.addEventListener('click',()=>{state.doctorPrescriptions=state.doctorPrescriptions.filter(x=>x.id!==b.dataset.deleteDoctorRx);saveState(false);refreshDoctorRecordsSheet(doctorId);}));
-  }
+  /* ===================== Doctor & pharmacy records =====================
+     Extracted to records.js (Phase 2, v1.9.0 architecture cleanup) — see that file.
+     Only the wiring lives here, same pattern as the planner extraction above. */
+  const _recordsModule = window.MRRecords.init({
+    getState: () => state, saveState, toast, openSheet, $, $$, uid, localISODate, dateOnly, prettyDate, esc, empty, num,
+    clean, norm, initials, doctorById, chemistById, doctorDisplayName, productOptions
+  });
+  const { doctorTopProducts, doctorRecordsCenter, renderDoctorRecordsBody, pharmacyProductsCenter, renderPharmacyProductsBody } = _recordsModule;
 
-  /* ===================== Pharmacy-wise product availability ===================== */
-  function renderPharmacyProductsBody(chemistId){
-    const chem=chemistById(chemistId);if(!chem)return empty('Chemist not found.');
-    const list=state.pharmacyProducts.filter(x=>x.chemistId===chemistId).sort((a,b)=>a.product.localeCompare(b.product));
-    return `<div class="detail-hero"><div class="avatar">${esc(initials(chem.name))}</div><div><h3>${esc(chem.name)}</h3><p>Pharmacy product availability — kept separate from visit notes.</p></div></div>
-    <form id="addPharmacyProductForm" class="sheet-form"><div class="field-grid two"><label><span>Product</span><select name="product">${productOptions()}</select></label><label><span>Qty on shelf</span><input name="qty" type="number" min="0" step="1" value="0"></label></div><label class="toggle-line"><input type="checkbox" name="available" checked> Currently available</label><label><span>Note</span><input name="notes" placeholder="Optional"></label><button class="btn primary full" type="submit">Save product record</button></form>
-    <div class="detail-section"><h4>Saved products (${list.length})</h4>${list.length?list.map(p=>`<div class="mini-card" style="margin-bottom:8px"><span class="mini-icon">${p.available?'✓':'✕'}</span><span class="mini-copy"><h3>${esc(p.product)}</h3><p>Qty ${esc(p.qty)} • checked ${esc(prettyDate(p.lastCheckedDate))}${p.notes?` • ${esc(p.notes)}`:''}</p></span><button data-delete-pharmacy-product="${esc(p.id)}" class="tag bad" style="border:0;cursor:pointer">Delete</button></div>`).join(''):empty('No products tracked for this pharmacy yet.')}</div>`;
-  }
-  function pharmacyProductsCenter(chemistId){
-    const chem=chemistById(chemistId);if(!chem)return;
-    openSheet('Pharmacy Products',chem.name,renderPharmacyProductsBody(chemistId));
-    bindPharmacyProductsEvents(chemistId);
-  }
-  function bindPharmacyProductsEvents(chemistId){
-    $('#addPharmacyProductForm')?.addEventListener('submit',e=>{
-      e.preventDefault();
-      const fd=new FormData(e.currentTarget),product=clean(fd.get('product'));
-      if(!product){toast('Select a product.');return;}
-      const existing=state.pharmacyProducts.find(x=>x.chemistId===chemistId&&norm(x.product)===norm(product));
-      const rec=existing||{id:uid('pprod'),chemistId};
-      rec.product=product;rec.qty=Math.max(0,num(fd.get('qty')));rec.available=Boolean(fd.get('available'));rec.notes=clean(fd.get('notes'));rec.lastCheckedDate=localISODate();rec.updatedAt=new Date().toISOString();
-      if(!existing)state.pharmacyProducts.push(rec);
-      saveState(false);toast('Pharmacy product saved.');
-      $('#sheetBody').innerHTML=renderPharmacyProductsBody(chemistId);bindPharmacyProductsEvents(chemistId);
-    });
-    $$('[data-delete-pharmacy-product]').forEach(b=>b.addEventListener('click',()=>{state.pharmacyProducts=state.pharmacyProducts.filter(x=>x.id!==b.dataset.deletePharmacyProduct);saveState(false);$('#sheetBody').innerHTML=renderPharmacyProductsBody(chemistId);bindPharmacyProductsEvents(chemistId);}));
-  }
+  /* ===================== Planning engine: date-wise auto patch / daily plan / 30-day advance plan =====================
+     Extracted to planner.js (Phase 2, v1.9.0 architecture cleanup) — see that file for the
+     implementation. Only the wiring lives here: give it what it needs, get back the same
+     function names every other part of this file already calls, unchanged. */
+  const _plannerModule = window.MRPlanner.init({
+    getState: () => state, saveState, toast, openSheet, $, $$, uid, localISODate, dateOnly, prettyDate, esc, empty, num,
+    effectiveSuccessfulDoctorVisits, monthKey, normalizeMeetingDays, daysBetween, doctorVisitPolicy, doctorDisplayName, doctorHospital
+  });
+  const { generateDateWisePlan, refresh30DayPlan, planForDate, pushPlanToPatch, renderPlanningBody, advancePlanningCenter, bindPlanningEvents } = _plannerModule;
 
-  /* ===================== Planning engine: date-wise auto patch / daily plan / 30-day advance plan ===================== */
-  function generateDateWisePlan(startDate=localISODate(),days=30,perDayCap=0){
-    const cap=perDayCap||Math.max(1,num(state.settings.dailyPlanCap)||8);
-    const start=new Date(`${startDate}T00:00:00`);
-    const lastVisitDate={};
-    state.doctors.forEach(d=>{const rows=effectiveSuccessfulDoctorVisits(d);lastVisitDate[d.id]=rows.length?rows[rows.length-1].date:null;});
-    const monthCounts={};
-    state.doctors.forEach(d=>{effectiveSuccessfulDoctorVisits(d).forEach(v=>{const k=`${monthKey(v.date)}|${d.id}`;monthCounts[k]=(monthCounts[k]||0)+1;});});
-    const plan=[];
-    for(let i=0;i<days;i++){
-      const d=new Date(start);d.setDate(d.getDate()+i);
-      const dateStr=localISODate(d),weekday=d.getDay(),mKey=monthKey(dateStr);
-      const candidates=state.doctors.filter(doc=>{
-        const wDays=normalizeMeetingDays(doc.meetingDays);
-        if(wDays.length&&!wDays.includes(weekday))return false;
-        const policy=doctorVisitPolicy(doc),countKey=`${mKey}|${doc.id}`;
-        if((monthCounts[countKey]||0)>=policy.target)return false;
-        const last=lastVisitDate[doc.id];
-        if(policy.gap&&last&&daysBetween(last,dateStr)<policy.gap)return false;
-        return true;
-      });
-      candidates.sort((a,b)=>{
-        const coreA=String(a.coreCategory).toUpperCase()==='C'?0:1,coreB=String(b.coreCategory).toUpperCase()==='C'?0:1;
-        if(coreA!==coreB)return coreA-coreB;
-        const gapA=lastVisitDate[a.id]?daysBetween(lastVisitDate[a.id],dateStr):9999,gapB=lastVisitDate[b.id]?daysBetween(lastVisitDate[b.id],dateStr):9999;
-        return gapB-gapA||doctorDisplayName(a).localeCompare(doctorDisplayName(b));
-      });
-      const picked=candidates.slice(0,cap);
-      const items=picked.map((doc,idx)=>({order:idx+1,doctorId:doc.id,doctorName:doctorDisplayName(doc),hospital:doctorHospital(doc),core:String(doc.coreCategory||'').toUpperCase(),reason:lastVisitDate[doc.id]?`${daysBetween(lastVisitDate[doc.id],dateStr)}d since last visit`:'No visit history yet'}));
-      picked.forEach(doc=>{lastVisitDate[doc.id]=dateStr;const k=`${mKey}|${doc.id}`;monthCounts[k]=(monthCounts[k]||0)+1;});
-      plan.push({date:dateStr,weekday,items});
-    }
-    return plan;
-  }
-  function refresh30DayPlan(){state.thirtyDayPlan=generateDateWisePlan(localISODate(),30);state.thirtyDayPlanGeneratedAt=new Date().toISOString();saveState(false);}
-  function planForDate(dateStr){const found=(state.thirtyDayPlan||[]).find(p=>p.date===dateStr);return found||generateDateWisePlan(dateStr,1)[0];}
-  function pushPlanToPatch(dateStr){
-    const day=planForDate(dateStr);
-    if(!day||!day.items.length){toast('No eligible doctors for this date.');return;}
-    state.patchPlans.push({id:uid('patch'),date:dateStr,createdAt:new Date().toISOString(),status:'confirmed',items:day.items.map(x=>({order:x.order,type:'Doctor',doctorId:x.doctorId,doctorName:x.doctorName,hospital:x.hospital,timing:'Advance plan',score:'',reason:x.reason,productAction:''}))});
-    saveState();
-    toast(`${day.items.length} doctor call(s) pushed to patch plan for ${prettyDate(dateStr)}.`);
-  }
-  function renderPlanningBody(){
-    const today=planForDate(localISODate()),picked=planForDate(planningPickedDate),plan30=state.thirtyDayPlan||[];
-    const genAt=state.thirtyDayPlanGeneratedAt?new Date(state.thirtyDayPlanGeneratedAt).toLocaleString('en-IN'):'Not generated yet';
-    return `<div class="detail-section"><h4>Automatic Daily Planning — Today</h4>${today.items.length?today.items.map(x=>`<div class="machine-patch-row"><span>${x.order}</span><div><strong>${esc(x.doctorName)}</strong><small>${esc(x.reason)}${x.core?` • ${x.core==='C'?'CORE':'NON-CORE'}`:''}</small></div></div>`).join(''):empty('No eligible doctors today (targets met or gap not elapsed).')}<button class="btn primary compact" id="pushTodayPatchBtn" style="margin-top:10px">Push today to Smart Patch</button></div>
-    <div class="detail-section"><h4>Date-wise Auto Patch Setup</h4><div class="field-grid two"><label><span>Pick a date</span><input type="date" id="planDatePicker" value="${esc(planningPickedDate)}"></label></div><div id="planDateResult" style="margin-top:8px">${picked.items.length?picked.items.map(x=>`<div class="machine-patch-row"><span>${x.order}</span><div><strong>${esc(x.doctorName)}</strong><small>${esc(x.reason)}</small></div></div>`).join(''):empty('No eligible doctors on this date.')}</div><button class="btn secondary compact" id="pushPickedPatchBtn" style="margin-top:8px">Push this date to Smart Patch</button></div>
-    <div class="detail-section"><h4>Next 30 Days Advance Planning</h4><small class="muted-line">Generated: ${esc(genAt)} • uses visit gap, monthly target and CORE priority. Never edits doctor records — only planning entries.</small><button class="btn primary full" id="recalc30Btn" style="margin:8px 0">Recalculate 30-day plan</button>${plan30.length?plan30.map(day=>`<details style="margin-bottom:6px"><summary>${esc(prettyDate(day.date))} — ${day.items.length} call(s)</summary>${day.items.length?day.items.map(x=>`<div class="order-detail-row"><strong>${esc(x.doctorName)}</strong><span>${esc(x.reason)}</span></div>`).join(''):empty('No calls planned.')}</details>`).join(''):empty('Tap "Recalculate 30-day plan" to generate.')}</div>`;
-  }
-  function advancePlanningCenter(){
-    planningPickedDate=localISODate();
-    openSheet('Advance Planning','Date-wise auto patch • automatic daily plan • 30-day advance plan',renderPlanningBody());
-    bindPlanningEvents();
-  }
-  function bindPlanningEvents(){
-    $('#pushTodayPatchBtn')?.addEventListener('click',()=>pushPlanToPatch(localISODate()));
-    $('#pushPickedPatchBtn')?.addEventListener('click',()=>pushPlanToPatch(planningPickedDate));
-    $('#planDatePicker')?.addEventListener('change',e=>{planningPickedDate=dateOnly(e.target.value)||localISODate();$('#sheetBody').innerHTML=renderPlanningBody();bindPlanningEvents();});
-    $('#recalc30Btn')?.addEventListener('click',()=>{refresh30DayPlan();toast('30-day plan recalculated.');$('#sheetBody').innerHTML=renderPlanningBody();bindPlanningEvents();});
-  }
+  /* ===================== Admin: schema versioning + cloud sync panels =====================
+     Extracted to admin-cloud.js (Phase 2, v1.9.0 architecture cleanup) — see that file. */
+  let _adminModuleRef = null; // set below, after admin.js initializes — breaks the circular
+                               // dependency between admin.js and admin-cloud.js (see admin.js header)
+  const _adminCloudModule = window.MRAdminCloud.init({
+    getState: () => state, saveState, toast, $, $$, esc, empty, clean,
+    isUnlocked: () => _adminModuleRef ? _adminModuleRef.isUnlocked() : false,
+    appRelease: APP_RELEASE, schemaVersion: SCHEMA_VERSION,
+    rollbackToPreMigrationSnapshot, renderAdmin: () => renderAdmin()
+  });
+  const { renderSchemaPanel, bindSchemaEvents, renderCloudSyncPanel, renderAdminCloudStatus, bindCloudSyncEvents } = _adminCloudModule;
 
-  /* ===================== Super Admin: RBAC, feature flags, filters manager, data safety ===================== */
-  function renderAdminBody(){
-    const hasPin=Boolean(state.admin?.pinHash);
-    if(!hasPin){
-      return `<div class="form-card"><div class="form-title"><h2>Set Super Admin PIN</h2><p>Protects feature flags, filters and destructive controls. Separate from your app unlock PIN.</p></div><form id="setAdminPinForm" class="sheet-form"><div class="field-grid two"><label><span>New PIN</span><input name="pin" type="password" inputmode="numeric" minlength="4" maxlength="6"></label><label><span>Confirm PIN</span><input name="confirmPin" type="password" inputmode="numeric" minlength="4" maxlength="6"></label></div><button class="btn primary full" type="submit">Set Super Admin PIN</button></form></div>`;
-    }
-    if(!adminUnlocked){
-      return `<div class="lock-card" style="margin:20px auto"><div class="brand-mark large">SA</div><h1>Super Admin locked</h1><p>Enter Super Admin PIN to manage features, filters and data safety.</p><input id="adminUnlockPin" class="pin-input" inputmode="numeric" maxlength="6" placeholder="••••"><button id="adminUnlockBtn" class="btn primary full" type="button">Unlock</button><p id="adminUnlockError" class="error-text"></p></div>`;
-    }
-    const featuresHtml=FEATURE_CATALOG.map(([k,label])=>`<div class="toggle-line" style="justify-content:space-between;margin-bottom:8px"><span>${esc(label)}</span><label style="display:flex;align-items:center;gap:6px;margin:0"><input type="checkbox" data-toggle-feature="${esc(k)}" ${featureOn(k)?'checked':''}></label></div>`).join('');
-    const filters=state.filtersConfig?.doctors||[];
-    const filtersHtml=filters.length?filters.map(f=>`<div class="import-item"><div><strong>${esc(f.label)}</strong><small>field=${esc(f.field)} • ${esc(f.op)}${f.op!=='not_empty'?` "${esc(f.value)}"`:''}</small></div><button data-remove-filter="${esc(f.id)}" class="tag bad" style="border:0;cursor:pointer">Remove</button></div>`).join(''):empty('No custom doctor filters yet.');
-    const backups=(state.backupHistory||[]).slice(0,8);
-    const backupsHtml=backups.length?backups.map((b,i)=>{const check=verifyBackup(b);return `<div class="import-item"><div><strong>${esc(b.kind)} • ${esc(new Date(b.ts).toLocaleString('en-IN'))}</strong><small>${esc(humanBytes(b.sizeBytes))} • ${check.ok?'✓ verified':'⚠ '+esc(check.reason)}</small></div><button data-restore-backup="${i}" class="tag" style="border:0;cursor:pointer">Restore</button></div>`;}).join(''):empty('No snapshots yet — one is taken automatically each day and before risky operations (import, migration, reset).');
-    return `
-    <div class="form-card"><div class="form-title"><h2>RBAC status</h2><p>Unlocked for this session only; locks again on app restart or when you tap Lock. This is a local offline app — the PIN gates the controls below in-app; it is not a server-enforced permission boundary.</p></div><button id="adminLockBtn" class="btn secondary">Lock now</button></div>
-    <div class="form-card"><div class="form-title"><h2>Visit frequency policy</h2><p>CORE doctors are auto-scheduled more often than NON-CORE across every planning tool. Applies to any doctor without a manual override on their profile.</p></div>
-    <form id="visitPolicyForm" class="sheet-form"><div class="field-grid two"><label><span>CORE — meetings / month</span><select name="coreMonthlyTarget"><option value="2" ${num(state.settings.coreMonthlyTarget)===2?'selected':''}>Twice (2×)</option><option value="3" ${num(state.settings.coreMonthlyTarget)!==2?'selected':''}>Thrice (3×)</option></select></label><label><span>NON-CORE — meetings / month</span><select name="nonCoreMonthlyTarget"><option value="1" selected>Once (1×)</option></select></label></div><button class="btn primary full" type="submit">Save policy</button></form></div>
-    <div class="form-card"><div class="form-title"><h2>Feature control</h2><p>Add / remove visibility of app features instantly across the whole app.</p></div>${featuresHtml}</div>
-    <div class="form-card"><div class="form-title"><h2>Doctor filters manager</h2><p>Add or remove custom quick-filter chips shown on the Doctors list.</p></div>
-    <form id="addFilterForm" class="sheet-form"><div class="field-grid two"><label><span>Chip label</span><input name="label" placeholder="e.g. High Potential" required></label><label><span>Doctor field</span><select name="field"><option value="coreCategory">CORE / NON-CORE</option><option value="speciality">Speciality</option><option value="productFocus">Focused brand</option><option value="area">Area</option></select></label></div><div class="field-grid two"><label><span>Match</span><select name="op"><option value="equals">Equals</option><option value="contains">Contains</option><option value="not_empty">Not empty</option></select></label><label><span>Value</span><input name="value" placeholder="Value to match"></label></div><button class="btn primary full" type="submit">Add filter</button></form>
-    <div style="margin-top:10px">${filtersHtml}</div></div>
-    <div class="form-card"><div class="form-title"><h2>Data safety & backup</h2><p>Automatic daily snapshot + a snapshot before every import, migration and reset. Each snapshot is checksum-verified.</p></div><button id="manualSnapshotBtn" class="btn primary">Create backup now</button><div style="margin-top:10px">${backupsHtml}</div></div>
-    <div class="danger-card"><div><h3>Remove Super Admin PIN</h3><p>Removes the admin gate. Current feature/filter settings stay as-is.</p></div><button id="removeAdminPinBtn" class="btn danger compact">Remove</button></div>
-    `;
-  }
-  function renderAdmin(){const body=$('#adminBody');if(!body)return;body.innerHTML=renderAdminBody();bindAdminEvents();}
-  function bindAdminEvents(){
-    $('#setAdminPinForm')?.addEventListener('submit',async e=>{e.preventDefault();const fd=new FormData(e.currentTarget),p=clean(fd.get('pin')),c=clean(fd.get('confirmPin'));if(!/^\d{4,6}$/.test(p)||p!==c){toast('PIN must be matching 4–6 digits.');return;}state.admin.pinHash=await hashPin(p);saveState(false);adminUnlocked=true;renderAdmin();toast('Super Admin PIN set. Unlocked for this session.');});
-    $('#adminUnlockBtn')?.addEventListener('click',async()=>{const h=await hashPin($('#adminUnlockPin').value);if(h===state.admin.pinHash){adminUnlocked=true;renderAdmin();}else{const err=$('#adminUnlockError');if(err)err.textContent='Wrong PIN';}});
-    $('#adminUnlockPin')?.addEventListener('keydown',e=>{if(e.key==='Enter')$('#adminUnlockBtn')?.click();});
-    $('#adminLockBtn')?.addEventListener('click',()=>{adminUnlocked=false;renderAdmin();});
-    $('#removeAdminPinBtn')?.addEventListener('click',()=>{if(!adminUnlocked){toast('Unlock first.');return;}if(!confirm('Remove Super Admin PIN?'))return;state.admin.pinHash='';adminUnlocked=false;saveState(false);renderAdmin();toast('Super Admin PIN removed.');});
-    $('#visitPolicyForm')?.addEventListener('submit',e=>{e.preventDefault();if(!adminUnlocked){toast('Unlock Super Admin first.');return;}const fd=new FormData(e.currentTarget);state.settings.coreMonthlyTarget=num(fd.get('coreMonthlyTarget'))||3;state.settings.nonCoreMonthlyTarget=num(fd.get('nonCoreMonthlyTarget'))||1;saveState(false);toast(`CORE doctors now target ${state.settings.coreMonthlyTarget}× / month; NON-CORE ${state.settings.nonCoreMonthlyTarget}× / month.`);});
-    $$('[data-toggle-feature]').forEach(cb=>cb.addEventListener('change',e=>{if(!adminUnlocked){e.target.checked=!e.target.checked;toast('Unlock Super Admin first.');return;}state.featureFlags[e.target.dataset.toggleFeature]=e.target.checked;saveState(false);applyFeatureVisibility();}));
-    $('#addFilterForm')?.addEventListener('submit',e=>{e.preventDefault();if(!adminUnlocked){toast('Unlock Super Admin first.');return;}const fd=new FormData(e.currentTarget),label=clean(fd.get('label'));if(!label){toast('Enter a chip label.');return;}state.filtersConfig.doctors.push({id:uid('filt'),label,field:fd.get('field'),op:fd.get('op'),value:clean(fd.get('value'))});saveState(false);renderAdmin();toast('Filter added — visible as a chip on Doctors.');});
-    $$('[data-remove-filter]').forEach(b=>b.addEventListener('click',()=>{if(!adminUnlocked){toast('Unlock Super Admin first.');return;}state.filtersConfig.doctors=state.filtersConfig.doctors.filter(f=>f.id!==b.dataset.removeFilter);saveState(false);renderAdmin();}));
-    $('#manualSnapshotBtn')?.addEventListener('click',()=>{if(!adminUnlocked){toast('Unlock Super Admin first.');return;}const r=snapshotBackup('manual');saveState(false);renderAdmin();toast(r?'Backup created and verified.':'Backup failed.');});
-    $$('[data-restore-backup]').forEach(b=>b.addEventListener('click',()=>{if(!adminUnlocked){toast('Unlock Super Admin first.');return;}if(!confirm('Restore this backup? Current data will first be snapshotted, then replaced.'))return;try{const entry=(state.backupHistory||[])[Number(b.dataset.restoreBackup)];restoreFromSnapshot(entry);toast('Backup restored.');renderAdmin();navigate('dashboard');}catch(err){toast(err.message);}}));
-  }
+  /* ===================== Admin: RBAC, feature flags, filters, backup/restore =====================
+     Extracted to admin.js (Phase 2, v1.9.0 architecture cleanup) — see that file. */
+  const _adminModule = window.MRAdmin.init({
+    getState: () => state, saveState, toast, $, $$, esc, empty, clean, num, uid, hashPin,
+    featureOn, FEATURE_CATALOG, verifyBackup, humanBytes, applyFeatureVisibility,
+    snapshotBackup, restoreFromSnapshot, navigate, renderSchemaPanel, renderCloudSyncPanel,
+    renderAdmin: () => renderAdmin()
+  });
+  _adminModuleRef = _adminModule;
+  const { renderAdminBody, bindAdminEvents } = _adminModule;
+
+  function renderAdmin(){const body=$('#adminBody');if(!body)return;body.innerHTML=renderAdminBody();bindAdminEvents();bindCloudSyncEvents();bindSchemaEvents();}
 
   function showBootFailure(error){
     console.error('MR One boot failure',error);document.documentElement.dataset.boot='failed';
@@ -2973,6 +2879,15 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
       if(window.AndroidBridge?.fetchLocation)setTimeout(requestProximityCheck,650);
       if('serviceWorker'in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./service-worker.js').catch(console.warn);
       if(!state.settings.bundledImportAttempted&&location.protocol!=='file:')setTimeout(()=>loadBundledFiles(true),1100);
+      if(window.MRCloud?.isEnabled?.()){
+        idle(async()=>{
+          try{
+            await window.MRCloud.authInit();
+            window.MRCloud.pendingSyncTrigger=()=>window.MRCloud.syncNow(()=>state,()=>{saveState(false);renderAdminCloudStatus?.();});
+            if(window.MRCloud.isSignedIn())window.MRCloud.syncNow(()=>state,()=>{saveState(false);renderAdminCloudStatus?.();});
+          }catch(e){console.warn('Cloud sync init deferred failure',e);}
+        },{timeout:1500});
+      }
     }catch(error){showBootFailure(error);}
   }
   window.addEventListener('error',e=>console.error('MR One runtime error',e.error||e.message));

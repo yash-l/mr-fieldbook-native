@@ -373,3 +373,22 @@ input[type="checkbox"]{accent-color:var(--brand)}
 .admin-banner h2{margin:5px 0 3px;font-size:16px;letter-spacing:-.01em}
 .admin-banner p{margin:0;font-size:11px;color:rgba(255,255,255,.82);line-height:1.4;max-width:280px}
 .admin-banner-arrow{font-size:22px;flex:0 0 auto}
+
+/* ===================== v24: FINAL AUTHORITATIVE PALETTE OVERRIDE =====================
+   This file has accumulated multiple :root{} and .hero-card/.brand-mark redeclarations
+   across many historical "v1.x" sections above, several with hardcoded (non-variable)
+   teal hex values that win the CSS cascade by simply appearing later in the file.
+   Everything below is intentionally the LAST rule for each selector in this file, so it
+   cannot be silently overridden the same way again. Do not add any --brand/--bg/.hero-card/
+   .brand-mark rules after this block. */
+:root{--bg:#f4f3fb;--surface:#fff;--surface2:#eeecfb;--ink:#181227;--muted:#6a637f;--line:#e3dff2;--brand:#5b3df5;--brand2:#3d21c9;--brandsoft:#ece7ff;--navy:#150f2e;--gold:#c8922a;--goldsoft:#faf1de}
+:root[data-theme="dark"]{--bg:#0c0a14;--surface:#161320;--surface2:#1e1a2c;--ink:#f4f2fa;--muted:#a49cbd;--line:#2c2640;--brand:#a48bff;--brand2:#c9b8ff;--brandsoft:#241d42;--navy:#f6f7f8;--soft:#171320;--glass:rgba(12,10,20,.88);--gold:#e0b563;--goldsoft:#2e2411}
+:root[data-theme="black"]{--bg:#000;--surface:#0a0810;--surface2:#141019;--ink:#f7f7f7;--muted:#948dac;--line:#241f30;--brand:#a48bff;--brand2:#c9b8ff;--brandsoft:#1d1732;--navy:#fff;--soft:#0d0a14;--glass:rgba(0,0,0,.90);--gold:#e0b563;--goldsoft:#241c0d}
+.hero-card{background:radial-gradient(circle at 88% 8%,rgba(200,146,42,.5),transparent 34%),radial-gradient(circle at 8% 100%,rgba(155,120,255,.35),transparent 45%),linear-gradient(150deg,#6b46f7,#1c1240 88%)!important}
+.brand-mark,.brand-mark.large{background:linear-gradient(145deg,#6b46f7,#1c1240)!important}
+.icon-btn.accent{background:linear-gradient(145deg,#6b46f7,#3d21c9)!important}
+.fab-inline{background:linear-gradient(145deg,#6b46f7,#3d21c9)!important}
+.san-overlay-card{background:linear-gradient(145deg,#6b46f7,#1c1240)!important}
+.machine-patch-row>span{background:var(--goldsoft)!important;color:var(--gold)!important}
+.core-badge.core{background:linear-gradient(135deg,#d8a94a,#a9781c)!important;color:#2a1c02!important}
+.chip[data-value^="core:C"].active{background:linear-gradient(135deg,#d8a94a,#a9781c)!important;color:#2a1c02!important;border-color:transparent!important}
