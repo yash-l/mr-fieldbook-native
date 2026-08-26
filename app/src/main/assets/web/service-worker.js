@@ -1,4 +1,4 @@
-const CACHE = 'mr-one-shell-v190-fresh-1';
+const CACHE = 'mr-one-shell-v191-admin-cloud-config';
 
 const PRECACHE = [
   './',

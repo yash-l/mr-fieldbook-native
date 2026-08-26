@@ -1,6 +1,5 @@
 // MR-One cloud — Supabase client bootstrap.
-// Depends on: the supabase-js UMD build (loaded before this file in index.html)
-// and window.MR_ONE_CLOUD_CONFIG (cloud/config.js, loaded before this file).
+// Depends on: supabase-js UMD + window.MR_ONE_CLOUD_CONFIG.
 (function () {
   'use strict';
   const cfg = window.MR_ONE_CLOUD_CONFIG || {};
@@ -19,7 +18,10 @@
     return client;
   }
 
+  function resetClient() { client = null; }
+
   window.MRCloud = window.MRCloud || {};
   window.MRCloud.getClient = getClient;
+  window.MRCloud.resetClient = resetClient;
   window.MRCloud.isEnabled = () => Boolean(cfg.enabled);
 })();
