@@ -402,3 +402,17 @@ input[type="checkbox"]{accent-color:var(--brand)}
 .cloud-otp-verify{margin-top:12px;padding:14px;border:1px solid var(--border);border-radius:16px;background:var(--surface2)}
 .otp-code-input{font-size:22px!important;font-weight:800;letter-spacing:.32em;text-align:center;font-variant-numeric:tabular-nums;min-height:52px}
 .cloud-auth-card .btn[disabled]{opacity:.55;pointer-events:none}
+
+/* ===================== v1.9.6: fix 6 confirmed missing CSS classes (referenced in app.js, never defined) ===================== */
+.empty-state{display:flex;align-items:flex-start;gap:8px;padding:14px 4px;color:var(--muted)}
+.empty-state span{font-size:16px;line-height:1;color:var(--muted)}
+.empty-state p{margin:0;font-size:12.5px;line-height:1.5}
+.clinic-meeting-inline{align-items:end}
+.legacy-appointment{opacity:.72;border-style:dashed}
+.route-limit{border-color:var(--warning);background:var(--warningsoft)}
+.sample-panel{border-top:1px dashed var(--line);margin-top:10px;padding-top:10px}
+.smart-leg-break{border-left:3px solid var(--brand);padding-left:10px}
+
+/* ===================== v1.9.6: sheet scroll-reset fix support ===================== */
+.bottom-sheet{max-height:min(94dvh,94vh)}
+.sheet-body{max-height:calc(min(94dvh,94vh) - 77px);overscroll-behavior:contain;-webkit-overflow-scrolling:touch}

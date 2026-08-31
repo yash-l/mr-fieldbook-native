@@ -1,4 +1,4 @@
-const CACHE = 'mr-one-shell-v195-password-auth';
+const CACHE = 'mr-one-shell-v196-sheet-fix';
 
 const PRECACHE = [
   './',

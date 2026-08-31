@@ -4,7 +4,7 @@
   const STORE_KEY = 'mr-daily-auto-v3';
   const STORE_BACKUP_KEY = 'mr-daily-auto-v3-last-good';
   const APP_VERSION = 1.82;
-  const APP_RELEASE = '1.9.2';
+  const APP_RELEASE = '1.9.6';
   const SCHEMA_VERSION = 6; // bump this, and only this, whenever migrateState()'s output shape changes
   const METRICS = [
     ['calls', 'Calls'],
@@ -744,7 +744,7 @@ function defaultSchemes() {
     locationVerifyContext={doctorId:id,place:place||null,latitude:lat,longitude:lng,address,query};
     openSheet('Verify doctor location','Cross-check doctor name + hospital/clinic + address before MR One trusts this location.',`<div class="verification-card"><span class="verification-badge ${status.level}">${esc(status.label)}</span><h3>${esc(d.name)} <em>${esc(doctorType(d))}</em></h3><p>${esc(place?.name||doctorHospital(d)||'Hospital not linked')}</p><small>${esc(address||'Address not entered')}</small></div><div class="note-box"><strong>Google query</strong><br>${esc(query)}</div><div class="button-row"><a class="btn secondary" href="${googleUrl}" target="_blank" rel="noopener">Open Google Maps</a>${hasOptionalGooglePlaces()?'<button id="autoGoogleCrossCheckBtn" class="btn primary" type="button">Auto cross-check</button>':''}</div>${lat&&lng?`<a class="btn secondary full" href="${mapUrl(lat,lng)}" target="_blank" rel="noopener">Open saved/selected pin</a>`:''}<button id="manualGoogleConfirmBtn" class="btn primary full" type="button" ${canManualConfirm?'':'disabled'}>I checked Google — location matches ✓</button><div id="googleCrossCheckResults" class="card-list compact-list"></div><small class="muted-line">Free mode opens the official Google Maps search for Doctor + Hospital + Address. With a Places key, Auto cross-check can return a Google candidate and save its Place ID/GPS.</small>`);
     $('#manualGoogleConfirmBtn')?.addEventListener('click',()=>{const ctx=locationVerifyContext,doc=doctorById(ctx?.doctorId);if(!ctx||!doc||(!(ctx.latitude&&ctx.longitude)&&!ctx.address))return;if(ctx.place){doc.hospital=clean(ctx.place.name)||doc.hospital;doc.address=clean(ctx.place.address)||doc.address;if(ctx.latitude&&ctx.longitude){doc.latitude=ctx.latitude;doc.longitude=ctx.longitude;}if(ctx.place.osmId)doc.osmId=ctx.place.osmId;}if(ctx.latitude&&ctx.longitude){doc.googleManualCheckedAt=new Date().toISOString();doc.locationVerificationStatus='verified';}else{doc.googleAddressCheckedAt=new Date().toISOString();doc.locationVerificationStatus='address_verified';}doc.locationSource='Google Maps manual cross-check: doctor + hospital + address';doc.updatedAt=new Date().toISOString();saveState(false);closeSheet();haptic('success');toast(ctx.latitude&&ctx.longitude?'Google + GPS location verified.':'Google address confirmed. Route can use this address; add GPS later for distance optimization.');});
-    $('#autoGoogleCrossCheckBtn')?.addEventListener('click',()=>{const out=$('#googleCrossCheckResults');if(out)out.innerHTML='<div class="notice">Checking Google Places…</div>';window.AndroidBridge?.searchDoctorPlaces?.('location-verify',query);});
+    $('#autoGoogleCrossCheckBtn')?.addEventListener('click',()=>{const out=$('#googleCrossCheckResults');if(out)out.innerHTML='<div class="notice">Checking Google Places…</div>';clearTimeout(locationVerifyTimeoutTimer);locationVerifyTimeoutTimer=setTimeout(()=>{const o=$('#googleCrossCheckResults');if(o)o.innerHTML='<div class="notice error">No response after 15 seconds. Use Open Google Maps and confirm manually instead.</div>';},15000);window.AndroidBridge?.searchDoctorPlaces?.('location-verify',query);});
   }
   function crossCheckScore(row,ctx){
     const d=doctorById(ctx?.doctorId);if(!d)return 0;
@@ -760,6 +760,8 @@ function defaultSchemes() {
   let pendingDoctorGpsId='';
   let pendingDoctorGpsRows=[];
   let pendingDoctorGpsProvider='osm';
+  let pendingDoctorGpsTimeoutTimer=null;
+  let locationVerifyTimeoutTimer=null;
   function cleanGpsQueryPart(value){return clean(value).replace(/https?:\/\/\S+/gi,' ').replace(/\s+/g,' ').trim();}
   function doctorGpsQuery(doctor){
     if(!doctor)return '';
@@ -783,6 +785,12 @@ function defaultSchemes() {
     if(!clean(doctor.address||doctor.hospitalAddress)){toast('Add clinic address first.');return;}
     pendingDoctorGpsId=id;pendingDoctorGpsRows=[];pendingDoctorGpsProvider=provider;
     renderDoctorGpsSearchShell(doctor,query,provider);
+    clearTimeout(pendingDoctorGpsTimeoutTimer);
+    pendingDoctorGpsTimeoutTimer=setTimeout(()=>{
+      const out=$('#doctorGpsResults');
+      if(out)out.innerHTML=`<div class="notice error">No response after 15 seconds. The app may have lost network, or the native lookup did not reply.</div><div class="button-row"><button id="doctorGpsRetryBtn" class="btn secondary" type="button">Try again</button></div>`;
+      $('#doctorGpsRetryBtn')?.addEventListener('click',()=>startDoctorGpsLookup(id,provider));
+    },15000);
     try{
       if(provider==='google'){
         if(!window.AndroidBridge?.searchDoctorPlaces){throw new Error('Google Places is not available in this build.');}
@@ -791,7 +799,7 @@ function defaultSchemes() {
         if(!window.AndroidBridge?.searchDoctorOpenStreetMap){throw new Error('Free GPS lookup needs the Android app build.');}
         window.AndroidBridge.searchDoctorOpenStreetMap('doctor-gps-osm',query);
       }
-    }catch(error){const out=$('#doctorGpsResults');if(out)out.innerHTML=`<div class="notice error">${esc(error?.message||'Could not start GPS search.')}</div>`;}
+    }catch(error){clearTimeout(pendingDoctorGpsTimeoutTimer);const out=$('#doctorGpsResults');if(out)out.innerHTML=`<div class="notice error">${esc(error?.message||'Could not start GPS search.')}</div>`;}
   }
   function resolveDoctorGpsOnline(id){startDoctorGpsLookup(id,'osm');}
   function useDoctorGpsResult(index){
@@ -812,14 +820,14 @@ function defaultSchemes() {
     out.innerHTML=pendingDoctorGpsRows.length?pendingDoctorGpsRows.map((x,i)=>`<article class="record-card"><div class="record-title"><h3>${esc(x.name||'Clinic / address')}</h3>${x.address?`<p>${esc(x.address)}</p>`:''}</div><div class="tag-row"><span class="tag">${esc(provider==='google'?'Google':(x.primaryType||'OSM'))}</span><span class="tag">${esc(Number(x.latitude).toFixed(5))}, ${esc(Number(x.longitude).toFixed(5))}</span></div><div class="record-actions"><a href="${provider==='osm'?osmMapUrl(x.latitude,x.longitude):mapUrl(x.latitude,x.longitude)}" target="_blank" rel="noopener">Check map</a><button data-action="use-doctor-gps" data-index="${i}">Use this GPS</button></div></article>`).join(''):empty('No confident address match found. Keep the saved address; do not save a guessed pin.');
   }
   window.__mrDoctorOpenStreetMapResults=(prefix,ok,json,error,cached)=>{
-    if(prefix!=='doctor-gps-osm')return;const out=$('#doctorGpsResults');if(!out)return;
+    if(prefix!=='doctor-gps-osm')return;clearTimeout(pendingDoctorGpsTimeoutTimer);const out=$('#doctorGpsResults');if(!out)return;
     if(!ok){out.innerHTML=`<div class="notice error">${esc(error||'Free OpenStreetMap lookup failed. Existing address/GPS was not changed.')}</div><div class="notice">Daily planner still works offline for doctors whose GPS was already saved.</div>`;return;}
     let rows=[];try{rows=JSON.parse(json||'[]');}catch(_){rows=[];}renderDoctorGpsRows(rows,'osm');
     const note=document.createElement('div');note.className='notice';note.textContent=cached?'Loaded from local OpenStreetMap lookup cache — no new network request.':'OpenStreetMap result received. Choose the correct clinic/address to save its pin offline.';out.prepend(note);
   };
   window.__mrDoctorPlaceResults=(prefix,ok,json,error)=>{
-    if(prefix==='location-verify'){const out=$('#googleCrossCheckResults');if(!out)return;if(!ok){out.innerHTML=`<div class="notice error">${esc(error||'Google cross-check failed. Use Open Google Maps and confirm manually.')}</div>`;return;}let rows=[];try{rows=JSON.parse(json||'[]');}catch(_){rows=[];}rows=rows.map(x=>({...x,score:crossCheckScore(x,locationVerifyContext)})).sort((a,b)=>b.score-a.score);out.innerHTML=rows.length?rows.map((x,i)=>`<article class="record-card"><div class="record-title"><h3>${esc(x.name||'Google place')}</h3><p>${esc(x.address||'')}</p></div><div class="tag-row"><span class="tag ${x.score>=60?'good':'due'}">Match ${esc(x.score)}</span></div><div class="record-actions"><a href="${mapUrl(x.latitude,x.longitude)}" target="_blank" rel="noopener">Map</a><button class="primary-action" data-action="confirm-google-candidate" data-index="${i}">Confirm</button></div></article>`).join(''):empty('No Google candidate found. Use manual Google Maps check.');locationVerifyContext.googleRows=rows;return;}
-    if(prefix!=='doctor-gps')return;const out=$('#doctorGpsResults');if(!out)return;
+    if(prefix==='location-verify'){clearTimeout(locationVerifyTimeoutTimer);const out=$('#googleCrossCheckResults');if(!out)return;if(!ok){out.innerHTML=`<div class="notice error">${esc(error||'Google cross-check failed. Use Open Google Maps and confirm manually.')}</div>`;return;}let rows=[];try{rows=JSON.parse(json||'[]');}catch(_){rows=[];}rows=rows.map(x=>({...x,score:crossCheckScore(x,locationVerifyContext)})).sort((a,b)=>b.score-a.score);out.innerHTML=rows.length?rows.map((x,i)=>`<article class="record-card"><div class="record-title"><h3>${esc(x.name||'Google place')}</h3><p>${esc(x.address||'')}</p></div><div class="tag-row"><span class="tag ${x.score>=60?'good':'due'}">Match ${esc(x.score)}</span></div><div class="record-actions"><a href="${mapUrl(x.latitude,x.longitude)}" target="_blank" rel="noopener">Map</a><button class="primary-action" data-action="confirm-google-candidate" data-index="${i}">Confirm</button></div></article>`).join(''):empty('No Google candidate found. Use manual Google Maps check.');locationVerifyContext.googleRows=rows;return;}
+    if(prefix!=='doctor-gps')return;clearTimeout(pendingDoctorGpsTimeoutTimer);const out=$('#doctorGpsResults');if(!out)return;
     if(!ok){out.innerHTML=`<div class="notice error">${esc(error||'Optional Google GPS search failed. Existing address/GPS was not changed.')}</div>`;return;}
     let rows=[];try{rows=JSON.parse(json||'[]');}catch(_){rows=[];}renderDoctorGpsRows(rows,'google');
   };
@@ -1350,8 +1358,11 @@ function orderMiniCard(o){
     return 'exit';
   };
   function openSheet(title,subtitle,body) {
-    $('#sheetTitle').textContent=title; $('#sheetSubtitle').textContent=subtitle||''; $('#sheetBody').innerHTML=body;
+    const sheetBody=$('#sheetBody');
+    $('#sheetTitle').textContent=title; $('#sheetSubtitle').textContent=subtitle||'';
+    sheetBody.scrollTop=0; sheetBody.innerHTML=body; sheetBody.scrollTop=0;
     $('#sheetBackdrop').classList.remove('hidden'); $('#editorSheet').classList.remove('hidden'); document.body.style.overflow='hidden';
+    requestAnimationFrame(()=>{sheetBody.scrollTop=0;});
   }
   function closeSheet(){ if(window.AndroidBridge?.stopVoiceCapture)window.AndroidBridge.stopVoiceCapture();voiceHandlers?.clear?.();$('#sheetBackdrop').classList.add('hidden');$('#editorSheet').classList.add('hidden');document.body.style.overflow=''; }
   function toast(text){const el=$('#toast');el.textContent=text;el.classList.remove('hidden');clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.classList.add('hidden'),2600);}
