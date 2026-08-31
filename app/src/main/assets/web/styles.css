@@ -412,7 +412,3 @@ input[type="checkbox"]{accent-color:var(--brand)}
 .route-limit{border-color:var(--warning);background:var(--warningsoft)}
 .sample-panel{border-top:1px dashed var(--line);margin-top:10px;padding-top:10px}
 .smart-leg-break{border-left:3px solid var(--brand);padding-left:10px}
-
-/* ===================== v1.9.6: sheet scroll-reset fix support ===================== */
-.bottom-sheet{max-height:min(94dvh,94vh)}
-.sheet-body{max-height:calc(min(94dvh,94vh) - 77px);overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
