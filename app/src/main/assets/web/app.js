@@ -1173,39 +1173,10 @@ function orderMiniCard(o){
     const routable=selected.filter(doctorRouteRoutable),needsLocation=selected.filter(d=>!doctorRouteRoutable(d));
     const start=latitude&&longitude?{latitude:num(latitude),longitude:num(longitude)}:null,totalKm=start?selectedRouteDistance(selected,start):0;
     const googleMultiUrl=selectedDoctorsGoogleMapsUrl(selected),withinGoogleLimit=selected.length<=9;
-    const routeRows=selected.map((d,i)=>{
-      const v=doctorLocationVerification(d),hasGps=doctorRouteHasGps(d),hasAddress=doctorRouteHasAddress(d);
-      const locationTagClass=hasGps?(v.verified?'good':''):(hasAddress?'due':'risk');
-      const locationLabel=hasGps?(v.verified?'Verified GPS':v.label||'Saved GPS'):(hasAddress?'Address only':'Find address');
-      const badge=i<26?String.fromCharCode(65+i):String(i+1);
-      const subtitle=[doctorHospital(d),inferDoctorArea(d)].filter(Boolean).join(' • ');
-      const noteLine=doctorRouteAddress(d);
-      // Same info a doctor-list card shows: specialty, core/non-core, today's
-      // timing availability, clinic-access timing, and focus products — so a
-      // route stop doesn't need a separate tap into the doctor to see this.
-      const doctorKind=doctorType(d),coreCat=String(d.coreCategory||'').toUpperCase();
-      const typeTag=doctorKind?`<span class="tag specialty">${esc(doctorKind)}</span>`:'';
-      const coreTag=['C','NC'].includes(coreCat)?`<span class="core-badge ${coreCat==='C'?'core':'noncore'}">${coreCat==='C'?'Core':'Non-core'}</span>`:'';
-      const today=doctorTodayAvailability(d),timing=doctorMeetingStatus(d);
-      const todayTag=today?`<span class="tag ${today.state==='available'?'good':''}">${esc(today.label||'Available today')}</span>`:'';
-      const timingTag=`<span class="tag timing ${timing.state==='available'?'good':timing.state==='unset'?'missing':''}">${esc(doctorClinicSystem(d)==='appointment'?'Appointment access':doctorClinicSystem(d)==='card_later'?(cardDroppedForDate(d.id)?'Card given • meeting ready':`Card ${timeLabel(doctorCardDropTime(d))}`):(timing.state==='unset'?'Timing missing':timing.label))}</span>`;
-      const productTags=suggestedProductsForDoctor(d).slice(0,3).map(t=>`<span class="tag product-fit">${esc(t)}</span>`).join('');
-      const clinicTag=`<span class="tag">${esc(doctorClinicSystemLabel(d))}</span>`;
-      return `<article class="record-card route-stop-card">
-        <div class="record-top">
-          <div class="avatar">${esc(badge)}</div>
-          <div class="record-title"><div class="title-line"><h3>${esc(doctorDisplayName(d))}</h3>${typeTag}${coreTag}</div><p>${esc(subtitle||'Details not added')}</p></div>
-        </div>
-        ${noteLine?`<p class="record-note">${esc(noteLine).slice(0,180)}</p>`:''}
-        <div class="tag-row"><span class="tag ${locationTagClass}">Stop ${esc(badge)} • ${esc(locationLabel)}</span>${todayTag}${timingTag}${productTags}${clinicTag}</div>
-        <div class="record-actions doctor-actions-four">
-          <button type="button" data-action="route-move-up" data-id="${esc(d.id)}" ${i===0?'disabled':''}>↑ Up</button>
-          <button type="button" data-action="route-move-down" data-id="${esc(d.id)}" ${i===selected.length-1?'disabled':''}>↓ Down</button>
-          <button type="button" data-action="route-move-to" data-id="${esc(d.id)}">Move</button>
-          <a class="primary-action" href="${doctorRouteGoogleUrl(d)}" target="_blank" rel="noopener">${hasAddress||hasGps?'Check':'Find'}</a>
-        </div>
-      </article>`;
-    }).join('');
+    // Selected-doctor stops reuse the exact doctor-list card (recordCard) so
+    // both places always show identical info; only the "+" becomes the stop letter
+    // and an Up/Down/Move row is added.
+    const routeRows=selected.map((d,i)=>recordCard(d,'doctor',{route:{badge:i<26?String.fromCharCode(65+i):String(i+1),index:i,total:selected.length}})).join('');
     let mapAction='';
     if(!withinGoogleLimit){
       mapAction=`<div class="notice route-limit"><strong>Google Maps limit:</strong> Android Google Maps accepts up to 9 stops in one multi-stop route. MR One kept all ${esc(selected.length)} selected doctors together and did not split or drop any doctor. To open the exact A/B/C draggable Maps screen, select 9 or fewer doctors.</div>`;
@@ -1309,8 +1280,9 @@ function orderMiniCard(o){
     const visible=list.slice(0,chemistRenderLimit);
     $('#chemistList').innerHTML=visible.length?visible.map(c=>recordCard(c,'chemist')).join('')+(list.length>visible.length?`<button class="btn secondary full load-more-btn" data-action="show-more-chemists">Show ${Math.min(60,list.length-visible.length)} more • ${list.length-visible.length} remaining</button>`:''):empty('No matching chemists. Import Excel or add one.');
   }
-  function recordCard(r,type) {
+  function recordCard(r,type,opts={}) {
     const isDoctor=type==='doctor';
+    const rt=isDoctor&&opts.route?opts.route:null;
     const ch=isDoctor?linkedChemist(r):null;
     const fb=!isDoctor?statusCountsForChemist(r.id):null;
     const map=entityMapUrl(r);
@@ -1322,9 +1294,10 @@ function orderMiniCard(o){
     const tags=isDoctor?
       [doctorClinicSystemLabel(r),doctorVisitPolicy(r).label,r.needsCompletion&&'Needs completion',r.latitude&&'Clinic GPS',r.lastVisit&&`Last ${prettyDate(r.lastVisit)}`,r.nextFollowUp&&`Due ${prettyDate(r.nextFollowUp)}`].filter(Boolean):
       [fb.prescribed&&`${fb.prescribed} prescribed`,fb.notPrescribed&&`${fb.notPrescribed} not prescribed`,r.latitude&&'Shop GPS'].filter(Boolean);
-    const todayAvailability=isDoctor&&doctorFilters.todayAvailable?doctorTodayAvailability(r):null;
+    const showToday=isDoctor&&(doctorFilters.todayAvailable||rt);
+    const todayAvailability=showToday?doctorTodayAvailability(r):null;
     const timingTag=isDoctor?`<span class="tag timing ${timing.state==='available'?'good':timing.state==='unset'?'missing':''}">${esc(doctorClinicSystem(r)==='appointment'?'Appointment access':doctorClinicSystem(r)==='card_later'?(cardDroppedForDate(r.id)?'Card given • meeting ready':`Card ${timeLabel(doctorCardDropTime(r))}`):(timing.state==='unset'?'Timing missing':timing.label))}</span>`:'';
-    const todayAvailabilityTag=isDoctor&&doctorFilters.todayAvailable?`<span class="tag ${todayAvailability?.state==='available'?'good':''}">${esc(todayAvailability?.label||'Available today')}</span>`:'';
+    const todayAvailabilityTag=showToday?`<span class="tag ${todayAvailability?.state==='available'?'good':''}">${esc(todayAvailability?.label||'Available today')}</span>`:'';
     const typeTag=isDoctor?`<span class="tag specialty">${esc(doctorKind)}</span>`:'';
     const coreTag=isDoctor&&['C','NC'].includes(String(r.coreCategory||'').toUpperCase())?`<span class="core-badge ${String(r.coreCategory).toUpperCase()==='C'?'core':'noncore'}">${String(r.coreCategory).toUpperCase()==='C'?'Core':'Non-core'}</span>`:'';
     const productTags=isDoctor?products.slice(0,3).map(t=>`<span class="tag product-fit">${esc(t)}</span>`).join(''):'';
@@ -1332,8 +1305,8 @@ function orderMiniCard(o){
     const verification=isDoctor?doctorLocationVerification(r):null;
     const verifyAction=isDoctor?`<button data-action="verify-doctor-location" data-id="${r.id}">${verification.verified?'Verified':'Verify'}</button>`:'';
     const actions=isDoctor?`${verifyAction}${locationAction}<button class="primary-action" data-action="log-record" data-type="doctor" data-id="${r.id}">Call</button><button data-action="view-record" data-type="doctor" data-id="${r.id}">View</button>`:`${locationAction}<button class="primary-action" data-action="chemist-visit" data-id="${r.id}">Visit</button><button data-action="quick-rcpa" data-id="${r.id}">RCPA</button><button data-action="view-record" data-type="chemist" data-id="${r.id}">View</button>`;
-    const routeSelected=isDoctor&&selectedRouteDoctorIds.has(r.id),routePick=isDoctor&&doctorRouteSelectMode?`<button type="button" class="route-pick ${routeSelected?'selected':''}" data-action="toggle-route-doctor" data-id="${esc(r.id)}" aria-pressed="${routeSelected?'true':'false'}" aria-label="${routeSelected?'Remove from':'Add to'} route">${routeSelected?'✓':'＋'}</button>`:'';
-    return `<article class="record-card ${routeSelected?'route-selected':''}"><div class="record-top"><div class="avatar">${esc(initials(r.name))}</div><div class="record-title"><div class="title-line"><h3>${esc(isDoctor?doctorDisplayName(r):r.name)}</h3>${typeTag}${coreTag}</div><p>${esc(subtitle||'Details not added')}</p></div>${routePick}</div>${r.address?`<p class="record-note">${esc(r.address).slice(0,180)}</p>`:''}<div class="tag-row">${todayAvailabilityTag}${timingTag}${isDoctor?`<span class="tag ${verification?.verified?'good':verification?.hasGps?'due':''}">${esc(verification?.label||'')}</span>`:''}${productTags}${tags.slice(0,1).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div><div class="record-actions ${isDoctor?'doctor-actions-four':'chemist-actions-four'}">${actions}</div></article>`;
+    const routeSelected=!rt&&isDoctor&&selectedRouteDoctorIds.has(r.id),routePick=rt?`<span class="route-pick selected route-stop-badge" aria-label="Stop ${esc(rt.badge)}">${esc(rt.badge)}</span>`:isDoctor&&doctorRouteSelectMode?`<button type="button" class="route-pick ${routeSelected?'selected':''}" data-action="toggle-route-doctor" data-id="${esc(r.id)}" aria-pressed="${routeSelected?'true':'false'}" aria-label="${routeSelected?'Remove from':'Add to'} route">${routeSelected?'✓':'＋'}</button>`:'';
+    return `<article class="record-card ${routeSelected?'route-selected':''} ${rt?'route-stop-card':''}"><div class="record-top"><div class="avatar">${esc(initials(r.name))}</div><div class="record-title"><div class="title-line"><h3>${esc(isDoctor?doctorDisplayName(r):r.name)}</h3>${typeTag}${coreTag}</div><p>${esc(subtitle||'Details not added')}</p></div>${routePick}</div>${r.address?`<p class="record-note">${esc(r.address).slice(0,180)}</p>`:''}<div class="tag-row">${todayAvailabilityTag}${timingTag}${isDoctor?`<span class="tag ${verification?.verified?'good':verification?.hasGps?'due':''}">${esc(verification?.label||'')}</span>`:''}${productTags}${tags.slice(0,1).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div><div class="record-actions ${isDoctor?'doctor-actions-four':'chemist-actions-four'}">${actions}</div>${rt?`<div class="route-reorder"><button type="button" data-action="route-move-up" data-id="${esc(r.id)}" ${rt.index===0?'disabled':''}>↑ Up</button><button type="button" data-action="route-move-down" data-id="${esc(r.id)}" ${rt.index===rt.total-1?'disabled':''}>↓ Down</button><button type="button" data-action="route-move-to" data-id="${esc(r.id)}">Move</button></div>`:''}</article>`;
   }
 
   function renderVisits() {

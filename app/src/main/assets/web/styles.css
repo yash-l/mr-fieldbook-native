@@ -433,3 +433,7 @@ input[type="checkbox"]{accent-color:var(--brand)}
 .tag.risk{background:var(--dangersoft,#fde2e2);color:var(--danger,#dc2626)}
 @media(max-width:380px){.route-stat-value{font-size:16px}}
 :root[data-theme="dark"] .route-stat-card,:root[data-theme="black"] .route-stat-card{background:var(--surface2);color:var(--ink);border-color:var(--line)}
+
+/* selected-route stop = same doctor card; reorder row + stop badge */
+.route-pick.route-stop-badge{cursor:default;pointer-events:none}
+.route-reorder{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}.route-reorder button{border:1px solid var(--line);background:var(--surface2);color:var(--ink);border-radius:14px;min-height:38px;font-weight:800;font-size:12px}.route-reorder button:disabled{opacity:.4}
