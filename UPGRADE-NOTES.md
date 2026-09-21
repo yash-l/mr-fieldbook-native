@@ -31,8 +31,8 @@ so it can be dropped in wholesale, but only those two files differ from your
 upload.
 
 ## Not yet included (still to plan/build)
-- Route-build section redesign (new UI/UX)
-- General usability pass across the app
-- Daily automation of the "route build patch" (needs a decision on
-  client-side-by-date vs. a real backend/cron, since render.yaml is a static
-  site with no server)
+- General usability pass across the rest of the app (needs you to point at
+  specific screens/flows — "usability" is too broad to safely rewrite blind)
+- A real background/scheduled daily refresh (push notification style) — see
+  CHANGELOG-v1.9.7.md for why the patch itself doesn't need this to stay current
+

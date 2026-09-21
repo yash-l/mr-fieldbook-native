@@ -1174,23 +1174,46 @@ function orderMiniCard(o){
     const start=latitude&&longitude?{latitude:num(latitude),longitude:num(longitude)}:null,totalKm=start?selectedRouteDistance(selected,start):0;
     const googleMultiUrl=selectedDoctorsGoogleMapsUrl(selected),withinGoogleLimit=selected.length<=9;
     const routeRows=selected.map((d,i)=>{
-      const v=doctorLocationVerification(d),hasGps=doctorRouteHasGps(d),hasAddress=doctorRouteHasAddress(d),mode=hasGps?(v.verified?'Verified GPS':'Saved GPS'):(hasAddress?'Address':'Find address'),query=doctorRouteGoogleQuery(d);
-      return `<div class="route-stop ${!doctorRouteRoutable(d)?'route-risk':''}"><span>${i<26?String.fromCharCode(65+i):String(i+1)}</span><div><strong>${esc(doctorDisplayName(d))}</strong><small>${esc([mode,doctorHospital(d),doctorRouteAddress(d)||inferDoctorArea(d),doctorType(d)].filter(Boolean).join(' • '))}</small><em>${esc(query)}</em></div><div class="route-stop-actions"><button class="btn secondary compact" data-action="route-move-up" data-id="${esc(d.id)}" ${i===0?'disabled':''}>↑</button><button class="btn secondary compact" data-action="route-move-down" data-id="${esc(d.id)}" ${i===selected.length-1?'disabled':''}>↓</button><button class="btn secondary compact" data-action="route-move-to" data-id="${esc(d.id)}">Move</button><a class="btn secondary compact" href="${doctorRouteGoogleUrl(d)}" target="_blank" rel="noopener">${hasAddress||hasGps?'Google check':'Find address'}</a></div></div>`;
+      const v=doctorLocationVerification(d),hasGps=doctorRouteHasGps(d),hasAddress=doctorRouteHasAddress(d);
+      const statusClass=hasGps?(v.verified?'status-verified':'status-saved'):(hasAddress?'status-address':'status-missing');
+      const statusLabel=hasGps?(v.verified?'Verified GPS':'Saved GPS'):(hasAddress?'Address only':'Find address');
+      const badge=i<26?String.fromCharCode(65+i):String(i+1);
+      return `<div class="route-stop-card ${statusClass}" data-route-stop-id="${esc(d.id)}">
+        <div class="route-stop-index">${badge}</div>
+        <div class="route-stop-body">
+          <div class="route-stop-top"><strong class="route-stop-name">${esc(doctorDisplayName(d))}</strong><span class="route-status-pill ${statusClass}">${esc(statusLabel)}</span></div>
+          <div class="route-stop-meta">${esc([doctorHospital(d),doctorRouteAddress(d)||inferDoctorArea(d),doctorType(d)].filter(Boolean).join(' • '))}</div>
+        </div>
+        <div class="route-stop-actions">
+          <button type="button" class="route-icon-btn" data-action="route-move-up" data-id="${esc(d.id)}" ${i===0?'disabled':''} aria-label="Move up">↑</button>
+          <button type="button" class="route-icon-btn" data-action="route-move-down" data-id="${esc(d.id)}" ${i===selected.length-1?'disabled':''} aria-label="Move down">↓</button>
+          <button type="button" class="route-icon-btn route-icon-btn-wide" data-action="route-move-to" data-id="${esc(d.id)}">Move</button>
+          <a class="route-icon-btn route-icon-btn-wide" href="${doctorRouteGoogleUrl(d)}" target="_blank" rel="noopener">${hasAddress||hasGps?'Check':'Find'}</a>
+        </div>
+      </div>`;
     }).join('');
     let mapAction='';
     if(!withinGoogleLimit){
       mapAction=`<div class="notice route-limit"><strong>Google Maps limit:</strong> Android Google Maps accepts up to 9 stops in one multi-stop route. MR One kept all ${esc(selected.length)} selected doctors together and did not split or drop any doctor. To open the exact A/B/C draggable Maps screen, select 9 or fewer doctors.</div>`;
     }else if(needsLocation.length){
-      mapAction=`<div class="notice"><strong>Confirm ${esc(needsLocation.length)} location${needsLocation.length===1?'':'s'} first.</strong> Use Find address / Google check. After every selected doctor has a saved address or GPS, this same button opens the complete A/B/C route in Google Maps.</div>`;
+      mapAction=`<div class="notice route-limit"><strong>Confirm ${esc(needsLocation.length)} location${needsLocation.length===1?'':'s'} first.</strong> Use Find / Check below. After every selected doctor has a saved address or GPS, this same button opens the complete A/B/C route in Google Maps.</div>`;
     }else if(googleMultiUrl){
-      mapAction=`<a class="btn primary full" href="${googleMultiUrl}" target="_blank" rel="noopener">Open all ${esc(selected.length)} selected doctor${selected.length===1?'':'s'} in Google Maps</a><small class="muted-line">Google Maps opens the selected doctors as one editable multi-stop route in this exact order. Drag the stops inside Maps to rearrange them.</small>`;
+      mapAction=`<div class="route-cta"><a class="btn primary full" href="${googleMultiUrl}" target="_blank" rel="noopener">Open all ${esc(selected.length)} selected doctor${selected.length===1?'':'s'} in Google Maps</a><small class="muted-line">Google Maps opens the selected doctors as one editable multi-stop route in this exact order. Drag the stops inside Maps to rearrange them.</small></div>`;
     }
-    out.innerHTML=`<div class="manager-summary"><div><small>SELECTED</small><strong>${esc(selected.length)}</strong></div><div><small>LOCATION READY</small><strong>${esc(routable.length)}</strong></div><div><small>NEEDS ADDRESS</small><strong>${esc(needsLocation.length)}</strong></div></div><div class="notice"><strong>Selected doctors → Google Maps multi-stop route.</strong> Your manual order becomes A → B → C → D… in Maps. Google resolves each stop from confirmed Place ID when available, otherwise saved GPS/address.${totalKm?` Saved-GPS chain is about ${esc(totalKm.toFixed(1))} km before Google road calculation.`:''}${accuracy?` Current GPS accuracy ±${esc(Math.round(accuracy))} m.`:''}</div>${mapAction}<div class="selected-route-list">${routeRows}</div>${needsLocation.length?`<div class="notice">Address missing means only “not saved yet.” Search uses Doctor + Hospital/Clinic + Type + Area/City, confirm the correct Google result, save address/GPS, then reopen the selected route.</div>`:''}`;
+    out.innerHTML=`<div class="route-stat-strip">
+        <div class="route-stat-card"><span class="route-stat-dot dot-selected"></span><strong class="route-stat-value">${esc(selected.length)}</strong><small class="route-stat-label">Selected</small></div>
+        <div class="route-stat-card"><span class="route-stat-dot dot-ready"></span><strong class="route-stat-value">${esc(routable.length)}</strong><small class="route-stat-label">Location ready</small></div>
+        <div class="route-stat-card"><span class="route-stat-dot dot-missing"></span><strong class="route-stat-value">${esc(needsLocation.length)}</strong><small class="route-stat-label">Needs address</small></div>
+      </div>
+      <div class="notice"><strong>Selected doctors → Google Maps multi-stop route.</strong> Your manual order becomes A → B → C → D… in Maps. Google resolves each stop from confirmed Place ID when available, otherwise saved GPS/address.${totalKm?` Saved-GPS chain is about ${esc(totalKm.toFixed(1))} km before Google road calculation.`:''}${accuracy?` Current GPS accuracy ±${esc(Math.round(accuracy))} m.`:''}</div>
+      ${mapAction}
+      <div class="selected-route-list route-stop-list">${routeRows}</div>
+      ${needsLocation.length?`<div class="notice">Address missing means only “not saved yet.” Search uses Doctor + Hospital/Clinic + Type + Area/City, confirm the correct Google result, save address/GPS, then reopen the selected route.</div>`:''}`;
   }
 
   function buildSelectedDoctorRoute(){
     const selected=selectedRouteDoctors();if(!selected.length){toast('Select at least one doctor first.');return;}
-    openSheet('Selected doctor route',`${selected.length} doctors • manual order → Google Maps`,`<div class="notice"><strong>Google Maps route:</strong> selected doctors stay in your manual order. With 9 or fewer location-ready doctors, Open in Google Maps launches the editable A/B/C multi-stop screen.</div><div class="location-card"><div class="location-head"><div><strong>My current location</strong><small id="selectedrouteLocationStatus" class="location-status loading">Fetching current GPS…</small></div><button type="button" id="selectedrouteFetchLocation" class="btn secondary compact">Refresh GPS</button></div><a id="selectedrouteLocationMap" class="hidden" target="_blank" rel="noopener">View my location</a><input id="selectedrouteLatitude" type="hidden"><input id="selectedrouteLongitude" type="hidden"><input id="selectedrouteAccuracy" type="hidden"><input id="selectedrouteCapturedAt" type="hidden"></div><div id="selectedRouteResults">${empty('Preparing your full selected route…')}</div>`);
+    openSheet('Selected doctor route',`${selected.length} doctors • manual order → Google Maps`,`<div class="route-build-shell"><div class="notice"><strong>Google Maps route:</strong> selected doctors stay in your manual order. With 9 or fewer location-ready doctors, Open in Google Maps launches the editable A/B/C multi-stop screen.</div><div class="location-card route-location-card"><div class="location-head"><div><strong>My current location</strong><small id="selectedrouteLocationStatus" class="location-status loading">Fetching current GPS…</small></div><button type="button" id="selectedrouteFetchLocation" class="btn secondary compact">Refresh GPS</button></div><a id="selectedrouteLocationMap" class="hidden" target="_blank" rel="noopener">View my location</a><input id="selectedrouteLatitude" type="hidden"><input id="selectedrouteLongitude" type="hidden"><input id="selectedrouteAccuracy" type="hidden"><input id="selectedrouteCapturedAt" type="hidden"></div><div id="selectedRouteResults">${empty('Preparing your full selected route…')}</div></div>`);
     if(selectedRouteGpsListener)document.removeEventListener('mr-location-ready',selectedRouteGpsListener);selectedRouteGpsListener=e=>{if(e.detail?.prefix!=='selectedroute')return;renderSelectedDoctorRoutePreview(e.detail.latitude,e.detail.longitude,e.detail.accuracy||0);};document.addEventListener('mr-location-ready',selectedRouteGpsListener);
     if(lastFieldLocation){$('#selectedrouteLatitude').value=lastFieldLocation.latitude;$('#selectedrouteLongitude').value=lastFieldLocation.longitude;$('#selectedrouteAccuracy').value=lastFieldLocation.accuracy||'';renderSelectedDoctorRoutePreview(lastFieldLocation.latitude,lastFieldLocation.longitude,lastFieldLocation.accuracy||0);}else renderSelectedDoctorRoutePreview(0,0,0);
     setupLocationCapture('selectedroute',true);
