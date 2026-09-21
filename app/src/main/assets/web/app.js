@@ -2118,9 +2118,17 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
     const selectedMeetingDays=()=>form.elements.meetingDays?[...form.elements.meetingDays].filter(x=>x.checked).map(x=>Number(x.value)):[];
     const setMeetingDays=days=>$$('input[name="meetingDays"]',form).forEach(x=>x.checked=days.includes(Number(x.value)));
     const setTimingDisabled=()=>{
-      const appointmentOnly=clinicSystemSelect?.value==='appointment',disabled=timingPending.checked||appointmentOnly;
-      ['meetingFrom','meetingTo','meetingFrom2','meetingTo2'].forEach(name=>{form.elements[name].disabled=disabled;});
-      $('#meetingDaySelector').classList.toggle('disabled',disabled);
+      // BUGFIX: previously this disabled the From/To/day inputs whenever "timing not
+      // confirmed" was checked (which is the DEFAULT state for any doctor who has no
+      // saved timing yet). That silently blocked typing into the fields — a user could
+      // enter a meeting time, it would look accepted, but the disabled input is excluded
+      // from the submitted form data, so the time was never saved. Fields must stay
+      // editable regardless of the pending checkbox; only a true appointment-only clinic
+      // system disables them, since those doctors use the separate Appointments flow.
+      const appointmentOnly=clinicSystemSelect?.value==='appointment';
+      ['meetingFrom','meetingTo','meetingFrom2','meetingTo2'].forEach(name=>{form.elements[name].disabled=appointmentOnly;});
+      $('#meetingDaySelector').classList.toggle('disabled',appointmentOnly);
+      $('#meetingDaySelector').classList.toggle('pending',timingPending.checked&&!appointmentOnly);
       $('.schedule-quick',form)?.classList.toggle('disabled',appointmentOnly);
     };
     const syncMeetingClinicSystem=()=>{
@@ -2202,7 +2210,16 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
     $('#meetingClearDaysBtn').addEventListener('click',()=>{setMeetingDays([]);setPresetTimes('','','','');});
     clinicSystemSelect?.addEventListener('change',()=>{syncMeetingClinicSystem();refreshSummary();refreshOutcomeIntelligence();});
     timingPending.addEventListener('change',()=>{setTimingDisabled();refreshSummary();refreshOutcomeIntelligence();});
-    $$('input[name="meetingDays"], input[name="meetingFrom"], input[name="meetingTo"], input[name="meetingFrom2"], input[name="meetingTo2"]',form).forEach(x=>x.addEventListener('change',()=>{refreshSummary();refreshOutcomeIntelligence();}));
+    $$('input[name="meetingDays"], input[name="meetingFrom"], input[name="meetingTo"], input[name="meetingFrom2"], input[name="meetingTo2"]',form).forEach(x=>x.addEventListener('change',()=>{
+      // BUGFIX (same issue as setTimingDisabled above): if the user actually fills in a
+      // day or a time while "timing not confirmed" is still checked, that means the
+      // timing IS now confirmed — auto-clear the checkbox so submit doesn't discard what
+      // they just entered. This is the actual fix for "meeting time doesn't save".
+      if(!timingPending.disabled&&clinicSystemSelect?.value!=='appointment'&&(selectedMeetingDays().length||form.elements.meetingFrom.value||form.elements.meetingFrom2.value)){
+        timingPending.checked=false;
+      }
+      setTimingDisabled();refreshSummary();refreshOutcomeIntelligence();
+    }));
     syncMeetingClinicSystem();
     bindStatusButtons($('#meetingProductRows'));
     const meetingSampleRoot=$('#meetingSampleRows');bindSampleIssueRows(meetingSampleRoot);
@@ -2219,7 +2236,11 @@ function updateOrderTotal(root){const total=collectOrderItems(root).reduce((n,x)
       e.preventDefault();
       const fd=new FormData(form), d=doctorById(doctorIdInput.value), c=chemistById(fd.get('chemistId'));
       if(!d){toast('Search and choose a doctor or hospital.');doctorInput.focus();showDoctorResults();return;}
-      let hospital=clean(fd.get('hospital'));const clinicSystem=clean(fd.get('clinicSystem'))||'direct',cardDropTime=normalizeTime(fd.get('cardDropTime')),days=fd.getAll('meetingDays').map(Number),from=normalizeTime(fd.get('meetingFrom')),to=normalizeTime(fd.get('meetingTo')),from2=normalizeTime(fd.get('meetingFrom2')),to2=normalizeTime(fd.get('meetingTo2')),isTimingPending=fd.get('timingPending')==='on'||clinicSystem==='appointment';
+      let hospital=clean(fd.get('hospital'));const clinicSystem=clean(fd.get('clinicSystem'))||'direct',cardDropTime=normalizeTime(fd.get('cardDropTime')),days=fd.getAll('meetingDays').map(Number),from=normalizeTime(fd.get('meetingFrom')),to=normalizeTime(fd.get('meetingTo')),from2=normalizeTime(fd.get('meetingFrom2')),to2=normalizeTime(fd.get('meetingTo2'));
+      // BUGFIX safety net: never treat timing as "pending" (and so discard it) if the
+      // user actually entered day(s) and/or a time — regardless of the checkbox state.
+      const enteredTiming=days.length||from||to||from2||to2;
+      const isTimingPending=clinicSystem==='appointment'||(fd.get('timingPending')==='on'&&!enteredTiming);
       // Fast field logging: a real call must never be lost just because master data is incomplete.
       // Hospital/chemist remain strongly encouraged and are marked pending for later completion.
       if(!hospital&&doctorHospital(d)){hospital=doctorHospital(d);hospitalInput.value=hospital;}

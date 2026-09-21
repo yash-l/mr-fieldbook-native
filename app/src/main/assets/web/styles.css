@@ -51,6 +51,7 @@
 .master-data-card{border-color:#b9ddd8;background:linear-gradient(180deg,#f4fffd 0%,var(--surface2) 100%)}
 .master-data-card .form-section-title h3{color:var(--brand2)}
 .day-selector.disabled{opacity:.45;pointer-events:none}
+.day-selector.pending{outline:1.5px dashed #c99b00;outline-offset:3px;border-radius:9px}
 .timing-pending-line{margin:10px 0 0!important;padding:9px 10px;border:1px dashed var(--line);border-radius:11px;background:#fff}
 
 /* v13 nearby hospital discovery and timing-aware routing */
