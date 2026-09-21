@@ -1175,22 +1175,36 @@ function orderMiniCard(o){
     const googleMultiUrl=selectedDoctorsGoogleMapsUrl(selected),withinGoogleLimit=selected.length<=9;
     const routeRows=selected.map((d,i)=>{
       const v=doctorLocationVerification(d),hasGps=doctorRouteHasGps(d),hasAddress=doctorRouteHasAddress(d);
-      const statusClass=hasGps?(v.verified?'status-verified':'status-saved'):(hasAddress?'status-address':'status-missing');
-      const statusLabel=hasGps?(v.verified?'Verified GPS':'Saved GPS'):(hasAddress?'Address only':'Find address');
+      const locationTagClass=hasGps?(v.verified?'good':''):(hasAddress?'due':'risk');
+      const locationLabel=hasGps?(v.verified?'Verified GPS':v.label||'Saved GPS'):(hasAddress?'Address only':'Find address');
       const badge=i<26?String.fromCharCode(65+i):String(i+1);
-      return `<div class="route-stop-card ${statusClass}" data-route-stop-id="${esc(d.id)}">
-        <div class="route-stop-index">${badge}</div>
-        <div class="route-stop-body">
-          <div class="route-stop-top"><strong class="route-stop-name">${esc(doctorDisplayName(d))}</strong><span class="route-status-pill ${statusClass}">${esc(statusLabel)}</span></div>
-          <div class="route-stop-meta">${esc([doctorHospital(d),doctorRouteAddress(d)||inferDoctorArea(d),doctorType(d)].filter(Boolean).join(' • '))}</div>
+      const subtitle=[doctorHospital(d),inferDoctorArea(d)].filter(Boolean).join(' • ');
+      const noteLine=doctorRouteAddress(d);
+      // Same info a doctor-list card shows: specialty, core/non-core, today's
+      // timing availability, clinic-access timing, and focus products — so a
+      // route stop doesn't need a separate tap into the doctor to see this.
+      const doctorKind=doctorType(d),coreCat=String(d.coreCategory||'').toUpperCase();
+      const typeTag=doctorKind?`<span class="tag specialty">${esc(doctorKind)}</span>`:'';
+      const coreTag=['C','NC'].includes(coreCat)?`<span class="core-badge ${coreCat==='C'?'core':'noncore'}">${coreCat==='C'?'Core':'Non-core'}</span>`:'';
+      const today=doctorTodayAvailability(d),timing=doctorMeetingStatus(d);
+      const todayTag=today?`<span class="tag ${today.state==='available'?'good':''}">${esc(today.label||'Available today')}</span>`:'';
+      const timingTag=`<span class="tag timing ${timing.state==='available'?'good':timing.state==='unset'?'missing':''}">${esc(doctorClinicSystem(d)==='appointment'?'Appointment access':doctorClinicSystem(d)==='card_later'?(cardDroppedForDate(d.id)?'Card given • meeting ready':`Card ${timeLabel(doctorCardDropTime(d))}`):(timing.state==='unset'?'Timing missing':timing.label))}</span>`;
+      const productTags=suggestedProductsForDoctor(d).slice(0,3).map(t=>`<span class="tag product-fit">${esc(t)}</span>`).join('');
+      const clinicTag=`<span class="tag">${esc(doctorClinicSystemLabel(d))}</span>`;
+      return `<article class="record-card route-stop-card">
+        <div class="record-top">
+          <div class="avatar">${esc(badge)}</div>
+          <div class="record-title"><div class="title-line"><h3>${esc(doctorDisplayName(d))}</h3>${typeTag}${coreTag}</div><p>${esc(subtitle||'Details not added')}</p></div>
         </div>
-        <div class="route-stop-actions">
-          <button type="button" class="route-icon-btn" data-action="route-move-up" data-id="${esc(d.id)}" ${i===0?'disabled':''} aria-label="Move up">↑</button>
-          <button type="button" class="route-icon-btn" data-action="route-move-down" data-id="${esc(d.id)}" ${i===selected.length-1?'disabled':''} aria-label="Move down">↓</button>
-          <button type="button" class="route-icon-btn route-icon-btn-wide" data-action="route-move-to" data-id="${esc(d.id)}">Move</button>
-          <a class="route-icon-btn route-icon-btn-wide" href="${doctorRouteGoogleUrl(d)}" target="_blank" rel="noopener">${hasAddress||hasGps?'Check':'Find'}</a>
+        ${noteLine?`<p class="record-note">${esc(noteLine).slice(0,180)}</p>`:''}
+        <div class="tag-row"><span class="tag ${locationTagClass}">Stop ${esc(badge)} • ${esc(locationLabel)}</span>${todayTag}${timingTag}${productTags}${clinicTag}</div>
+        <div class="record-actions doctor-actions-four">
+          <button type="button" data-action="route-move-up" data-id="${esc(d.id)}" ${i===0?'disabled':''}>↑ Up</button>
+          <button type="button" data-action="route-move-down" data-id="${esc(d.id)}" ${i===selected.length-1?'disabled':''}>↓ Down</button>
+          <button type="button" data-action="route-move-to" data-id="${esc(d.id)}">Move</button>
+          <a class="primary-action" href="${doctorRouteGoogleUrl(d)}" target="_blank" rel="noopener">${hasAddress||hasGps?'Check':'Find'}</a>
         </div>
-      </div>`;
+      </article>`;
     }).join('');
     let mapAction='';
     if(!withinGoogleLimit){
