@@ -181,12 +181,16 @@
       toast('Syncing…');
       const report = await window.MRCloud.syncNow(() => state, () => { saveState(false); });
       saveState(false); renderAdmin();
+      // A manual tap should always refresh every screen, not just Super Admin —
+      // deps.renderAll is wired in from app.js's dependency injection.
+      deps.renderAll?.();
       toast(report.skipped ? `Sync skipped: ${report.skipped}` : report.errors?.length ? `Synced with ${report.errors.length} error(s).` : 'Synced.');
     });
     $('#cloudMigrateBtn')?.addEventListener('click', async () => {
       toast("Uploading this device's data…");
       const report = await window.MRCloud.runFirstLoginMigrationIfNeeded(() => state, () => { saveState(false); });
       saveState(false); renderAdmin();
+      deps.renderAll?.();
       toast(report.skipped ? String(report.skipped) : 'Upload complete.');
     });
     $('#cloudSignOutBtn')?.addEventListener('click', async () => { await window.MRCloud.signOut(); renderAdmin(); toast('Signed out. Local data is unaffected.'); });

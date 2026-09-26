@@ -4,7 +4,7 @@
   const STORE_KEY = 'mr-daily-auto-v3';
   const STORE_BACKUP_KEY = 'mr-daily-auto-v3-last-good';
   const APP_VERSION = 1.82;
-  const APP_RELEASE = '1.9.5';
+  const APP_RELEASE = '1.9.10';
   const SCHEMA_VERSION = 6; // bump this, and only this, whenever migrateState()'s output shape changes
   const METRICS = [
     ['calls', 'Calls'],
@@ -673,9 +673,20 @@ function defaultSchemes() {
     }
     if (render) renderAll();
     if (window.MRCloud?.isEnabled?.()) {
-      window.MRCloud.scheduleSync(() => state, (s, report) => { if (report && !report.skipped) renderAdminCloudStatus?.(); });
+      window.MRCloud.scheduleSync(() => state, (s, report) => onCloudSyncSettled(report));
     }
     return true;
+  }
+
+  // Fires after any cloud sync (background debounce, initial sign-in pull, or the
+  // manual "Sync now" button). renderAdminCloudStatus keeps the Super Admin panel
+  // accurate; renderAll only runs when a pull actually changed rows, so a routine
+  // push-only sync never yanks focus away from something you're mid-edit on.
+  function onCloudSyncSettled(report) {
+    renderAdminCloudStatus?.();
+    if (!report || report.skipped) return;
+    const pulledRows = Object.values(report.pulled || {}).reduce((a, b) => a + (b || 0), 0);
+    if (pulledRows > 0) renderAll();
   }
 
   function focusProducts() {
@@ -2880,7 +2891,7 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
     getState: () => state, saveState, toast, $, $$, esc, empty, clean,
     isUnlocked: () => _adminModuleRef ? _adminModuleRef.isUnlocked() : false,
     appRelease: APP_RELEASE, schemaVersion: SCHEMA_VERSION,
-    rollbackToPreMigrationSnapshot, renderAdmin: () => renderAdmin()
+    rollbackToPreMigrationSnapshot, renderAdmin: () => renderAdmin(), renderAll: () => renderAll()
   });
   const { renderSchemaPanel, bindSchemaEvents, renderCloudSyncPanel, renderAdminCloudStatus, bindCloudSyncEvents } = _adminCloudModule;
 
@@ -2914,8 +2925,8 @@ function exportCompanyReportPack(){if(window.AndroidBridge?.saveReportPack){wind
         idle(async()=>{
           try{
             await window.MRCloud.authInit();
-            window.MRCloud.pendingSyncTrigger=()=>window.MRCloud.syncNow(()=>state,()=>{saveState(false);renderAdminCloudStatus?.();});
-            if(window.MRCloud.isSignedIn())window.MRCloud.syncNow(()=>state,()=>{saveState(false);renderAdminCloudStatus?.();});
+            window.MRCloud.pendingSyncTrigger=()=>window.MRCloud.syncNow(()=>state,(s,report)=>{saveState(false);onCloudSyncSettled(report);});
+            if(window.MRCloud.isSignedIn())window.MRCloud.syncNow(()=>state,(s,report)=>{saveState(false);onCloudSyncSettled(report);});
           }catch(e){console.warn('Cloud sync init deferred failure',e);}
         },{timeout:1500});
       }
